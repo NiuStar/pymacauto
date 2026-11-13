@@ -87,6 +87,15 @@ def main():
         assert Control(Element(app,rows[0])).select()['verified']
         first_cells=app.backend.get(rows[0],'AXChildren')
         cell_roles=[app.backend.get(c,'AXRole') for c in first_cells]
+        from pymacauto.collection import collect_pages
+        def read_page():return Element(app,session.detect()['table']).read_table()
+        def next_page(snapshot):
+            if snapshot['rows'][0]['Field0'].startswith('B:'):return False
+            session.switch('B');return True
+        collection=collect_pages(read_page,next_page,key_columns=['Field0'],max_pages=3,max_rows=300)
+        assert collection['row_count']==200 and collection['page_count']==2
+        assert collection['stop_reason']=='CALLER_END_OBSERVED' and not collection['global_complete']
+        session.switch('A')
         config_path=ROOT/'build/perf/pages.json'
         config_path.write_text(json.dumps({'window':{'identifier':'perf.window'},'pages':profile}))
         cli_env=({**os.environ,'PYTHONPATH':str(ROOT/'src')} if '--installed' not in sys.argv else
@@ -100,7 +109,7 @@ def main():
         assert front()==before,'Fixture changed foreground'
         assert child.poll() is None,'Fixture exited early'
         print(json.dumps({'status':'PASS','fixture':'owned_appkit_100x5','measurements':results,
-                          'foreground_preserved':True,'strict_table_verified':True,'native_row_select_verified':True,'native_cell_roles':cell_roles,'cli_page_verified':True,'config_constructor_verified':True,'module':__import__('pymacauto.query',fromlist=['']).__file__}))
+                          'foreground_preserved':True,'strict_table_verified':True,'native_row_select_verified':True,'native_cell_roles':cell_roles,'bounded_collection_rows':collection['row_count'],'cli_page_verified':True,'config_constructor_verified':True,'module':__import__('pymacauto.query',fromlist=['']).__file__}))
     finally:
         if child.poll() is None:
             child.terminate()

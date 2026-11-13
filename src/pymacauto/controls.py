@@ -7,7 +7,10 @@ from .errors import UnsafeOperation,VerificationFailed
 
 class Control:
     """Wrap a fresh Locator (recommended), or an explicitly held Element."""
-    def __init__(self,target):self.target=target
+    def __init__(self,target,*,before_input=None):self.target=target;self.before_input=before_input
+    def _input(self,element,callback):
+        if self.before_input is not None:self.before_input()
+        return callback()
     def element(self):return self.target.resolve() if hasattr(self.target,'resolve') else self.target
     def _role(self,roles,*,require_enabled=True):
         e=self.element();e._writable()
@@ -32,14 +35,14 @@ class Control:
         if type(value) not in (int,bool) or value not in (0,1):raise UnsafeOperation('Unknown/mixed check state')
         if _get(e.backend,e.ref,'AXRole')=='AXRadioButton' and not checked:
             raise UnsafeOperation('Select another radio; do not toggle selected radio off')
-        if bool(value)!=checked:e.click()
+        if bool(value)!=checked:self._input(e,e.click)
         return self._verify('AXValue',int(checked),timeout,check_state=True)
     def select(self,*,timeout=2):
         _positive(timeout,'timeout',zero=True)
         e=self._role(('AXRadioButton','AXRow','AXCell'),require_enabled=False)
         if _get(e.backend,e.ref,'AXRole')=='AXRadioButton':return self.set_checked(True,timeout=timeout)
         if not e.backend.is_settable(e.ref,'AXSelected'):raise UnsafeOperation('Selection not writable')
-        e.backend.set(e.ref,'AXSelected',True)
+        self._input(e,lambda:e.backend.set(e.ref,'AXSelected',True))
         return self._verify('AXSelected',True,timeout)
     def set_numeric(self,value,*,timeout=2):
         if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):raise ValueError('Finite numeric value required')
@@ -50,7 +53,7 @@ class Control:
             raise UnsafeOperation('Numeric limits unavailable')
         if low>high or not low<=value<=high:raise ValueError('Value outside declared limits')
         if not e.backend.is_settable(e.ref,'AXValue'):raise UnsafeOperation('Value not writable')
-        e.backend.set(e.ref,'AXValue',value)
+        self._input(e,lambda:e.backend.set(e.ref,'AXValue',value))
         return self._verify('AXValue',value,timeout)
     def select_tab(self,title,*,timeout=2):
         if not isinstance(title,str) or not title:raise ValueError('Exact tab title required')
@@ -62,16 +65,16 @@ class Control:
         matches=[r for r in tabs if _get(e.backend,r,'AXTitle')==title]
         if len(matches)!=1:raise UnsafeOperation('Tab title absent or ambiguous')
         from .core import Element
-        return Control(Element(e.app,matches[0])).set_checked(True,timeout=timeout)
+        return Control(Element(e.app,matches[0]),before_input=self.before_input).set_checked(True,timeout=timeout)
 
     def choose(self,title,*,timeout=2):
         if not isinstance(title,str) or not title:raise ValueError('Exact nonempty option title required')
         _positive(timeout,'timeout',zero=True)
         e=self._role(('AXPopUpButton',))
         if e.get_value()==title:return {'verified':True,'attribute':'AXValue'}
-        e.click()
+        self._input(e,e.click)
         # Only the menu exposed under this control. Never search the app's
         # unrelated menus, pick the first duplicate, or retry opening it.
         item=e.child_window(role='AXMenuItem',title=title).wait(timeout=timeout)
-        item.click()
+        self._input(item,item.click)
         return self._verify('AXValue',title,timeout)

@@ -54,6 +54,8 @@ def parser():
             q.add_argument('--expect-value',required=True)
             q.add_argument('--timeout',type=float,default=5)
             q.add_argument('--events',action='store_true')
+            q.add_argument('--journal',help='Private durable SQLite operation journal')
+            q.add_argument('--operation-id',help='Stable request ID required with --journal')
         if command=='page':
             q.add_argument('--config',required=True,help='JSON page fingerprint configuration')
             q.add_argument('--to',required=True,help='Target page name')
@@ -80,13 +82,21 @@ def run(args):
         from .operations import Condition,OperationSession
         from .core import Locator,_selector
         from .query import window_scope
+        if args.journal and not args.operation_id:raise ValueError('--journal requires --operation-id')
         window=json.loads(args.window)
         target=_selector(json.loads(args.target));expected=_selector(json.loads(args.expect))
         root=lambda:window_scope(app,**window).root
-        with OperationSession(app,window=window) as session:
-            return session.execute(Locator(app,(target,),root=root),
-                postcondition=Condition(Locator(app,(expected,),root=root),value=args.expect_value),
-                timeout=args.timeout,events=args.events)
+        if args.journal:
+            # Journal requests must use serializable application-rooted chains.
+            target_locator=app.window(**window).child_window(**target)
+            expect_locator=app.window(**window).child_window(**expected)
+        else:
+            target_locator=Locator(app,(target,),root=root)
+            expect_locator=Locator(app,(expected,),root=root)
+        with OperationSession(app,window=window,journal=args.journal) as session:
+            return session.execute(target_locator,
+                postcondition=Condition(expect_locator,value=args.expect_value),
+                timeout=args.timeout,events=args.events,operation_id=args.operation_id)
     if args.command=='page':
         from .pages import PageSession
         config=json.loads(Path(args.config).read_text(encoding='utf-8'))

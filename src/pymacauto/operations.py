@@ -3,6 +3,7 @@
 Receipts distinguish no dispatch from uncertain dispatch. They deliberately
 omit target values, selectors and exception messages, which may be private.
 """
+import copy
 import threading
 import time
 import uuid
@@ -60,16 +61,37 @@ class OperationSession:
     the library understands transactions. It may deliberately describe a modal
     result; modals are rejected before input, not automatically dismissed.
     """
-    def __init__(self,app,*,window):
-        self.app=app;self.window=_selector(window)
-        self._lock=threading.RLock();self._closed=False;self._receipts={}
+    def __init__(self,app,*,window,journal=None,profile=None):
+        self.app=app;self.window=_selector(window);self.profile=profile
+        self._lock=threading.RLock();self._closed=False;self._receipts={};self._fingerprints={}
+        from .journal import Journal
+        identity=getattr(app.backend,'process_identity',None)
+        self.identity=identity(app.pid) if callable(identity) and journal is not None else dict(app.info)
+        self.journal=Journal(journal) if journal is not None else None
+
+    def _request(self,target,postcondition,precondition,action):
+        def locator(value):
+            if value.app is not self.app or (self.journal is not None and value.root is not None):
+                raise ValueError('Durable operations require application-rooted lazy Locators')
+            return {'chain':value.chain,'root':None if value.root is None else id(value.root)}
+        def condition(value):
+            return None if value is None else {'locator':locator(value.locator),'state':value.state,'criteria':value.criteria}
+        return {'identity':self.identity,'profile':self.profile.sha256 if self.profile is not None else None,'window':self.window,'target':locator(target),
+                'action':action,'post':condition(postcondition),'pre':condition(precondition)}
 
     def __enter__(self):return self
     def __exit__(self,*args):self.close()
     def close(self):
-        with self._lock:self._closed=True
+        with self._lock:
+            if self._closed:return
+            self._closed=True
+            if self.journal is not None:self.journal.close()
 
     def _guard(self,target):
+        identity=getattr(self.app.backend,'process_identity',None)
+        if self.journal is not None and callable(identity) and identity(self.app.pid)!=self.identity:
+            raise UnsafeOperation('Application process identity changed')
+        if self.profile is not None:self.profile.require(self.app)
         scope=window_scope(self.app,**self.window)
         b=self.app.backend
         windows=b.get(self.app._root,'AXWindows')
@@ -86,9 +108,41 @@ class OperationSession:
         members={b.key(ref) for ref,_ in QueryScope(self.app,scope.root).walk()}
         if b.key(element.ref) not in members:raise UnsafeOperation('Target outside approved window')
         element._writable()
-        if _get(b,element.ref,'AXEnabled') is not True:
+        role=_get(b,element.ref,'AXRole');enabled=_get(b,element.ref,'AXEnabled')
+        if enabled is not True and not (enabled is None and role in ('AXRow','AXCell','AXTabGroup')):
             raise UnsafeOperation('Target not explicitly enabled')
         return element
+
+    def _guard_same(self,target,element):
+        fresh=self._guard(target)
+        if self.app.backend.key(fresh.ref)!=self.app.backend.key(element.ref):
+            raise UnsafeOperation('Target identity changed during multi-step operation')
+
+    def recover(self,operation_id,target,*,postcondition,precondition=None,action='AXPress',timeout=5,interval=.05):
+        """Observation only, never promotes uncertainty to causal confirmation."""
+        _positive(timeout,'timeout',zero=True);_positive(interval,'interval')
+        with self._lock:
+            if self._closed or self.journal is None:raise UnsafeOperation('Open durable session required')
+            request=self._request(target,postcondition,precondition,action)
+            identity=getattr(self.app.backend,'process_identity',None)
+            if callable(identity) and identity(self.app.pid)!=self.identity:raise UnsafeOperation('Application identity changed')
+            record=self.journal.lookup(operation_id,self.journal.fingerprint(request))
+            if record is None:raise UnsafeOperation('No original operation')
+            start=time.monotonic()
+            while True:
+                if postcondition.check():return {**record,'status':'RECOVERY_OBSERVED','verified':False,'observed':True,'recovered':True}
+                remaining=timeout-(time.monotonic()-start)
+                if remaining<=0:return {**record,'observed':False,'recovered':True}
+                time.sleep(min(interval,remaining))
+
+    def apply(self,target,kind,*,value=None,postcondition=None,precondition=None,operation_id=None,timeout=5,events=False):
+        if kind not in ('fill','check','numeric','select','tab','choose'):raise ValueError('Unknown protected control operation')
+        if postcondition is None:
+            if kind in ('tab','choose','select'):raise ValueError('Independent postcondition required for selection')
+            if kind=='check':postcondition=Condition(target,value=int(value) if type(value) is bool else value)
+            else:postcondition=Condition(target,value=value)
+        return self.execute(target,postcondition=postcondition,precondition=precondition,
+            action={'kind':kind,'value':value},operation_id=operation_id,timeout=timeout,events=events)
 
     def execute(self,target,*,postcondition,precondition=None,action='AXPress',timeout=5,interval=.05,operation_id=None,events=False):
         if not isinstance(postcondition,Condition) or (precondition is not None and not isinstance(precondition,Condition)):
@@ -99,24 +153,61 @@ class OperationSession:
         _positive(timeout,'timeout',zero=True);_positive(interval,'interval')
         if operation_id is not None and (not isinstance(operation_id,str) or not operation_id or len(operation_id)>128):
             raise ValueError('operation_id must be a nonempty string of at most 128 characters')
+        from .journal import canonical
+        import hashlib
+        request=self._request(target,postcondition,precondition,action)
+        fingerprint=self.journal.fingerprint(request) if self.journal is not None else hashlib.sha256(canonical(request)).hexdigest()
         start=time.monotonic()
         receipt={'operation_id':operation_id or uuid.uuid4().hex,'status':'NOT_DISPATCHED','dispatch_attempted':False,
-                 'verified':False,'attempts':0,'error':None}
+                 'verified':False,'attempts':0,'error':None,'timings':{}}
         with self._lock:
-            if operation_id in self._receipts:return dict(self._receipts[operation_id])
-            lock=_app_lock(self.app.pid);held=False;fd=None
+            if operation_id in self._receipts:
+                if fingerprint is not None and self._fingerprints[operation_id]!=fingerprint:raise UnsafeOperation('Operation ID conflict')
+                return copy.deepcopy(self._receipts[operation_id])
+            if self.journal is not None and not self._closed:
+                existing=self.journal.lookup(receipt['operation_id'],fingerprint)
+                if existing is not None:return existing
+            lock=_app_lock(self.app.pid);held=False;fd=None;claimed=False
             try:
                 if len(self._receipts)>=1024:raise UnsafeOperation('Receipt capacity reached; new session required')
                 if not lock.acquire(blocking=False):raise UnsafeOperation('Application operation busy')
                 held=True;fd=_file_lock(self.app.pid)
                 if self._closed:raise UnsafeOperation('Session closed')
+                stage=time.monotonic()
                 if precondition is not None and not precondition.check():
                     raise UnsafeOperation('Precondition not met')
                 if postcondition.check():raise UnsafeOperation('Postcondition already satisfied; use a distinct result')
                 element=self._guard(target)
-                if action not in element.backend.actions(element.ref):raise UnsafeOperation('Action unavailable')
+                receipt['timings']['preflight_seconds']=time.monotonic()-stage
+                if isinstance(action,str):
+                    if action not in element.backend.actions(element.ref):raise UnsafeOperation('Action unavailable')
+                elif not isinstance(action,dict) or set(action)!={'kind','value'}:
+                    raise ValueError('Invalid control operation')
+                stage=time.monotonic()
+                if self.journal is not None:
+                    previous=self.journal.claim(receipt['operation_id'],fingerprint)
+                    if previous is not None:return previous
+                    claimed=True
+                    # Commit acknowledgement may fail after disk commit: be
+                    # conservative about intent even when intent() raises.
+                    receipt.update(status='DISPATCHED_UNCONFIRMED',dispatch_attempted=True,attempts=1)
+                    self.journal.intent(receipt['operation_id'])
+                receipt['timings']['intent_seconds']=time.monotonic()-stage
+                stage=time.monotonic()
                 receipt.update(status='DISPATCHED_UNCONFIRMED',dispatch_attempted=True,attempts=1)
-                element.perform(action)
+                if isinstance(action,str):element.perform(action)
+                else:
+                    from .controls import Control
+                    control=Control(element,before_input=lambda:self._guard_same(target,element));kind=action['kind'];value=action['value']
+                    if kind=='fill':element.set_edit_text(value)
+                    elif kind=='check':control.set_checked(value,timeout=timeout)
+                    elif kind=='numeric':control.set_numeric(value,timeout=timeout)
+                    elif kind=='select':control.select(timeout=timeout)
+                    elif kind=='tab':control.select_tab(value,timeout=timeout)
+                    elif kind=='choose':control.choose(value,timeout=timeout)
+                    else:raise ValueError('Unknown control operation')
+                receipt['timings']['dispatch_seconds']=time.monotonic()-stage
+                stage=time.monotonic()
                 if events:
                     from .events import wait_condition
                     observation=wait_condition(postcondition,timeout=timeout,fallback_interval=max(interval,.25))
@@ -128,13 +219,22 @@ class OperationSession:
                     remaining=deadline-time.monotonic()
                     if remaining<=0:break
                     time.sleep(min(interval,remaining))
+                receipt['timings']['observation_seconds']=time.monotonic()-stage
             except Exception as exc:
                 receipt['error']=type(exc).__name__
             finally:
                 # Record uncertainty even when KeyboardInterrupt/SystemExit
                 # interrupts a native call; replay must not repeat the input.
                 receipt['elapsed_seconds']=time.monotonic()-start
-                if operation_id is not None and len(self._receipts)<1024:self._receipts[operation_id]=dict(receipt)
+                if operation_id is not None and len(self._receipts)<1024:
+                    self._receipts[operation_id]=copy.deepcopy(receipt);self._fingerprints[operation_id]=fingerprint
+                try:
+                    if claimed:self.journal.finish(receipt['operation_id'],receipt)
+                except Exception as exc:
+                    receipt['persistence_error']=type(exc).__name__
+                    receipt['verified']=False
+                    if receipt['dispatch_attempted']:receipt['status']='DISPATCHED_UNCONFIRMED'
+                    if operation_id is not None:self._receipts[operation_id]=copy.deepcopy(receipt)
                 try:
                     if fd is not None:os.close(fd)
                 finally:

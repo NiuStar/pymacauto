@@ -69,6 +69,15 @@ class OperationTests(unittest.TestCase):
         self.b.nodes['b']['AXValue']='after'
         receipt=self.s.execute(self.target,postcondition=self.after,timeout=0)
         self.assertEqual(receipt['status'],'NOT_DISPATCHED');self.assertEqual(self.b.calls,[])
+    def test_permission_failure_never_reaches_dispatch(self):
+        from pymacauto import PermissionDenied
+        original=self.b.get
+        def get(ref,attribute):
+            if attribute=='AXWindows':raise PermissionDenied('revoked')
+            return original(ref,attribute)
+        self.b.get=get
+        receipt=self.s.execute(self.target,postcondition=self.after,timeout=0)
+        self.assertEqual(receipt['status'],'NOT_DISPATCHED');self.assertEqual(self.b.calls,[])
     def test_dispatch_error_is_uncertain_not_safe_to_retry(self):
         def broken(*args):raise RuntimeError('sensitive payload')
         self.b.perform=broken

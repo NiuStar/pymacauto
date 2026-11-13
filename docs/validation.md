@@ -16,7 +16,7 @@
 ```bash
 uv build
 uv venv --python 3.12 .venv-check
-uv pip install --python .venv-check/bin/python dist/pymacauto-0.4.0-py3-none-any.whl
+uv pip install --python .venv-check/bin/python dist/pymacauto-0.5.0-py3-none-any.whl
 .venv-check/bin/python -m unittest discover -s tests -v
 .venv-check/bin/python tests/native/smoke.py --backend-checks
 .venv-check/bin/python scripts/native_check.py --installed
@@ -25,6 +25,16 @@ uv pip install --python .venv-check/bin/python dist/pymacauto-0.4.0-py3-none-any
 ```
 
 `--installed` 禁止源码路径注入，基础夹具还核查 SDK 与 CLI 都从独立环境导入。原生运行完整原始记录保留在操作者私有目录，不作为公开发行物。
+
+## 0.5.0 安装版验收
+
+- Mac独立环境Python3.12/PyObjC13：171项逻辑及10项桥接契约测试通过。
+- 三轮真实AppKit闭环均PASS，包含持久化重开、统一保护填写/勾选/数值、事件、模态阻止、跨进程锁；全部夹具回收、前台保持。此为短测，不是全天持续运行。
+- 真实子进程SIGKILL覆盖PREPARED/派发意图后/动作后；UI为明确标记的合成后端，不把它称为真实交易崩溃实验。
+- 原生100×5表格严格读取/行选择及显式双页200行采集通过；三组交错查询全部数据摘要相同。
+- 同花顺当前持仓9行×15列与前身原始值精确相同，零UI动作；版本profile资格检查通过。未提交/撤销订单。
+- 已有库缺操作表、阶段/回执矛盾、日志写入失败、请求ID冲突、进程身份变化、菜单中途sheet均含拒绝回归。
+- 保护填写原生诊断样本preflight约11ms、派发约1.5ms、结果观察约4ms；包含294次get与1次set，说明保护成本可观测，不作为任意应用时延承诺。
 
 ## 0.4.0 候选扩展
 

@@ -221,6 +221,30 @@ def main():
             assert cli_verified.returncode==0,cli_verified.stdout+cli_verified.stderr
             assert json.loads(cli_verified.stdout)['result']['status']=='CONFIRMED'
             report['checks']['verified_cli']=True
+            journal_directory=ROOT/'build/native'/('journal-'+str(time.time_ns()))
+            journal_directory.mkdir(mode=0o700)
+            journal_path=journal_directory/'operations.sqlite'
+            app.child_window(identifier='pymacauto.input').set_edit_text('durable test')
+            durable_post=Condition(app.child_window(identifier='pymacauto.result'),value='applied:durable test')
+            with app.session(identifier='pymacauto.window',journal=journal_path) as durable:
+                first=durable.execute(target,postcondition=durable_post,operation_id='native-durable',timeout=2)
+                assert first['status']=='CONFIRMED',first
+            with app.session(identifier='pymacauto.window',journal=journal_path) as durable:
+                assert durable.execute(target,postcondition=durable_post,operation_id='native-durable',timeout=0)==first
+                observed=durable.recover('native-durable',target,postcondition=durable_post,timeout=0)
+                assert observed['status']=='RECOVERY_OBSERVED'
+            report['checks']['durable_reopen_no_replay']=True
+            with app.session(identifier='pymacauto.window') as protected:
+                assert protected.apply(app.child_window(identifier='pymacauto.input'),'fill',value='protected')['status']=='CONFIRMED'
+                assert protected.apply(app.child_window(identifier='pymacauto.check'),'check',value=True)['status']=='CONFIRMED'
+                assert protected.apply(app.child_window(identifier='pymacauto.slider'),'numeric',value=4)['status']=='CONFIRMED'
+            from pymacauto import AXMetrics
+            with AXMetrics(app.backend) as metrics:
+                with app.session(identifier='pymacauto.window') as protected:
+                    metric_receipt=protected.apply(app.child_window(identifier='pymacauto.input'),'fill',value='metric value')
+                    assert metric_receipt['status']=='CONFIRMED'
+            report['checks']['operation_metrics']={'timings':metric_receipt['timings'],**metrics.summary()}
+            report['checks']['unified_protected_controls']=True
             # Identical readonly query in fresh processes vs interpreter reuse.
             reuse=[];spawn=[]
             for _ in range(3):

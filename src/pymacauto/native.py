@@ -74,6 +74,28 @@ class NativeBackend:
             for app in self._workspace.runningApplications()
         ]
 
+    def app_metadata(self,pid):
+        from AppKit import NSRunningApplication,NSBundle
+        app=NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        if app is None or app.bundleURL() is None:raise MacAXError('Application metadata unavailable')
+        info=NSBundle.bundleWithURL_(app.bundleURL()).infoDictionary()
+        return {'bundle_id':str(info.get('CFBundleIdentifier','')),
+                'version':str(info.get('CFBundleShortVersionString','')),
+                'build':str(info.get('CFBundleVersion',''))}
+
+    def process_identity(self,pid):
+        from AppKit import NSRunningApplication
+        app=NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        if app is not None and app.launchDate() is not None:
+            return {'pid':pid,'launch_epoch':float(app.launchDate().timeIntervalSince1970()),
+                    'bundle_id':str(app.bundleIdentifier() or '')}
+        # Directly spawned accessory fixtures may not register with NSWorkspace.
+        # ps launch time is an explicit lower-resolution identity fallback.
+        import subprocess
+        launched=subprocess.check_output(['/bin/ps','-p',str(pid),'-o','lstart=','-o','comm='],text=True,timeout=3).strip()
+        if not launched:raise MacAXError('Process identity unavailable')
+        return {'pid':pid,'launch_and_executable':launched,'resolution':'one_second'}
+
     def root(self, pid):
         validate_pid(pid)
         try:

@@ -146,9 +146,9 @@ class Application:
             raise ElementNotFound('AXWindows unavailable')
         return [Element(self,ref) for ref in refs]
 
-    def session(self,**window):
+    def session(self,*,journal=None,profile=None,**window):
         from .operations import OperationSession
-        return OperationSession(self,window=window)
+        return OperationSession(self,window=window,journal=journal,profile=profile)
 
     def inspect(self,**limits):
         from .inspector import inspect_application

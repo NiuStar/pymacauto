@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- SQLite私有意图日志、请求HMAC、同ID冲突拒绝、损坏schema拒绝与只读恢复。
+- session.apply统一填写/控件保护，多步输入前重查窗口和模态状态。
+- 原生进程身份、AppProfile版本结构资格与脱敏差异报告。
+- 显式有界collect_pages，严格拒绝重叠、变化和预算越界。
+- 阶段耗时、AXMetrics与可配置原生重复运行工具。
+- SIGKILL三处真实子进程故障测试，保留不确定性而不重放。
+
 ## 0.4.0
 
 - 单次操作回执、显式前后置条件、未知模态窗口保护和verified-action CLI。
