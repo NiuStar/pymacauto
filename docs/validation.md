@@ -16,7 +16,7 @@
 ```bash
 uv build
 uv venv --python 3.12 .venv-check
-uv pip install --python .venv-check/bin/python dist/pymacauto-0.7.0-py3-none-any.whl
+uv pip install --python .venv-check/bin/python dist/pymacauto-0.8.0-py3-none-any.whl
 .venv-check/bin/python -m unittest discover -s tests -v
 .venv-check/bin/python tests/native/smoke.py --backend-checks
 .venv-check/bin/python scripts/native_check.py --installed
@@ -26,7 +26,17 @@ uv pip install --python .venv-check/bin/python dist/pymacauto-0.7.0-py3-none-any
 
 `--installed` 禁止源码路径注入，基础夹具还核查 SDK 与 CLI 都从独立环境导入。原生运行完整原始记录保留在操作者私有目录，不作为公开发行物。
 
-## 0.8.0a1 隔离优化候选
+## 0.8.0 分层验收
+
+常规变更采用完整逻辑回归、确定性故障注入、原生功能闭环和5–10分钟有界压力。两小时/全天不是每次发布必经门；其结果与短协议独立。0.8.0a1原3309.25秒长测因前台变化FAIL永久保留，不通过缩短时长变成PASS。此次短协议由用户在明确讨论成本与范围后授权。
+
+前台变化诊断记录第一次前后PID/bundle/launch，不采集窗口标题或输入。变化即锁定STOP；确定性测试验证日志意图提交时改变前台→原生输入0；同PID身份变化、切回原应用仍停止、初始未知身份拒绝均有覆盖。原生宿主对同步AX调用仍无硬取消保证。
+
+首次0.8.0冻结安装版310项逻辑回归、10项桥接契约及完整原生闭环通过。300秒短压在16.38秒、28次自建操作及1次同花顺只读后FAIL：新诊断明确捕获Chrome→com.apple.UserNotificationCenter，夹具回收。该系统通知引发的变化仍必须停止，不能加入通知中心忽略名单，也不能将16秒当300秒PASS。新增精确通知场景锁定停止回归；候选尚未具备正式合入资格。
+
+原有查询、日志、防重指纹、表格双读和最后检查均保留，无下单/撤单、无生产服务替换。后续必须在通知安静窗口执行未通过的短协议，保留此次FAIL。
+
+## 0.8.0a1 历史候选
 
 - Mac安装版305项回归、10项桥接契约和完整原生控件/命名封装闭环通过；29个模块与工作树SHA逐字节核对。
 - 审查复现的安全子角色陈旧缓存、必需关系缺失被误判gone问题已修复并补回归；修复前数据保留，不沿用旧性能数值。

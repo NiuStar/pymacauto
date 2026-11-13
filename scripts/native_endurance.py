@@ -17,7 +17,7 @@ import time
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--seconds',type=float,default=7200)
+    p.add_argument('--seconds',type=float,default=300)
     p.add_argument('--interval',type=float,default=2)
     p.add_argument('--ths-interval',type=float,default=60)
     p.add_argument('--allow-ths-read',action='store_true')
@@ -37,7 +37,7 @@ def main():
     try:
         phase='imports'
         from pymacauto import Application,AXEvents,PageSession,read_table
-        from pymacauto.focus import current_front
+        from pymacauto.focus import current_front,foreground_identity,ForegroundGuard
         from AppKit import NSWorkspace
         import objc
         import pymacauto
@@ -50,6 +50,7 @@ def main():
         status['module_sha256']={f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in module.glob('*.py')}
         status['version']=pymacauto.__version__
         ws=NSWorkspace.sharedWorkspace();front=current_front(ws)
+        ownership=ForegroundGuard(lambda:foreground_identity(ws))
         bundle=args.output/'EnduranceFixture.app/Contents';binary=bundle/'MacOS/EnduranceFixture'
         phase='fixture_start'
         binary.parent.mkdir(parents=True)
@@ -85,13 +86,13 @@ def main():
         phase='workload'
         class StopSource:
             def is_set(self):
-                return stop.is_set() or (args.stop_file is not None and args.stop_file.exists()) or current_front(ws)!=front
+                return stop.is_set() or (args.stop_file is not None and args.stop_file.exists()) or ownership.is_set()
         with app.session(identifier='pymacauto.window',stop=StopSource()) as session:
             while time.monotonic()-loop_start<args.seconds:
                 if args.stop_file and args.stop_file.exists():
                     status['status']='STOPPED';break
                 if child.poll() is not None:raise RuntimeError('Owned fixture exited')
-                if current_front(ws)!=front:raise RuntimeError('Foreground ownership changed')
+                if ownership.is_set():raise RuntimeError('Foreground ownership changed')
                 started=time.monotonic()
                 with objc.autorelease_pool():
                     value='endurance-'+str(status['cycles'])
@@ -111,7 +112,7 @@ def main():
                         page=pages.detect();table=read_table(ths.backend,page['table'])
                         sample['ths']={'page':page['page'],'rows':table['row_count'],'columns':table['column_count'],'sha256':table['sha256']}
                         status['ths_reads']+=1;last_ths=time.monotonic()
-                    if current_front(ws)!=front:raise RuntimeError('Foreground changed during observation')
+                    if ownership.is_set():raise RuntimeError('Foreground changed during observation')
                 if rss0 is None:rss0=sample['rss_kb'];fds0=sample['fd_count'];threads0=sample['threads']
                 if sample['rss_kb']-rss0>args.max_rss_growth_mb*1024:raise RuntimeError('RSS growth guard')
                 if sample['fd_count']>fds0+4 or sample['threads']>threads0+2:raise RuntimeError('Resource growth guard')
@@ -124,7 +125,7 @@ def main():
             blocked=session.apply(field,'fill',value='MUST_NOT_WRITE',timeout=0)
             if blocked['status']!='NOT_DISPATCHED' or blocked.get('error_category')!='STOPPED':raise RuntimeError('Stop failed')
             status['stop_prevents_input']=True
-        status['foreground_preserved']=current_front(ws)==front
+        status['foreground_preserved']=not ownership.is_set()
         if not status['foreground_preserved']:status['status']='FAIL'
         status['actual_seconds']=time.monotonic()-loop_start
     except BaseException as exc:
@@ -134,6 +135,7 @@ def main():
         if type(exc) is RuntimeError:status['reason']=str(exc)[:160]
         if 'loop_start' in locals():status['actual_seconds']=time.monotonic()-loop_start
     finally:
+        if 'ownership' in locals():status['foreground_diagnostics']=ownership.report()
         if child is not None:
             if child.poll() is None:
                 child.terminate()
