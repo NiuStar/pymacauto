@@ -16,7 +16,7 @@
 ```bash
 uv build
 uv venv --python 3.12 .venv-check
-uv pip install --python .venv-check/bin/python dist/pymacauto-0.6.0-py3-none-any.whl
+uv pip install --python .venv-check/bin/python dist/pymacauto-0.7.0-py3-none-any.whl
 .venv-check/bin/python -m unittest discover -s tests -v
 .venv-check/bin/python tests/native/smoke.py --backend-checks
 .venv-check/bin/python scripts/native_check.py --installed
@@ -26,14 +26,18 @@ uv pip install --python .venv-check/bin/python dist/pymacauto-0.6.0-py3-none-any
 
 `--installed` 禁止源码路径注入，基础夹具还核查 SDK 与 CLI 都从独立环境导入。原生运行完整原始记录保留在操作者私有目录，不作为公开发行物。
 
-## 0.7.0 候选状态（未发布）
+## 0.7.0 验收结果
 
 - 最新候选独立安装版Mac回归263项及10项桥接契约通过，包含无动作ID跨重开防重、停止类别、总预算最后检查和诊断结构变化分类。
 - 限定自建字段写入及观察器生命周期的短测完成10轮、约21秒，并做2次同花顺当前页严格只读采集；前台保持和夹具回收通过。不是数小时证据。
 - 完整原生夹具与大表性能夹具出现前台变化，相关整轮为FAIL，不能用其中已完成的子项冒充完整通过。资源长测不能替代该发布门。
 - 新增保护扫描有成本，旧版性能数据不代表此候选；大表采集验收工具显式使用更长预算，产品默认值不放宽。
 - 冻结准备短测在约4.35秒、2次自建字段填写和1次同花顺只读后因前台变化停止，终态FAIL、夹具回收。Profile能力资格、只读定位解释及候选路径往返在该轮通过，但不替代整轮门禁。
-- 数小时长测因无法确认GUI所有权暂缓；最终冻结复跑、固定提交安装及CI尚待完成。详见[候选接口与持续验收](qualified-workflows.md)。
+- 后续在用户批准的安静GUI窗口内，对冻结候选846468b完成两小时验收：7200.34秒、3416次自建字段保护操作、118次同花顺当前页严格只读；前台保持、停止保护及夹具回收全部PASS。RSS首/末/峰值66448/45120/68480KB，FD始终6，线程始终1。该结论不扩展为全天或交易提交保证。
+- 同一冻结执行代码后续完整原生控件验收PASS，包含菜单、页签、事件、弹窗阻止、私有输出、日志重开及只读恢复，前台保持、夹具回收通过；历史FAIL保留，不将其改写为成功。
+- 100×5原生双页三组交错测量、严格读取、行选择、200行有界采集、配置/CLI切页全部PASS。所有6轮数据摘要一致；递归查询基线中位10.989秒、受保护限定页面路径中位1.992秒，get调用中位12264/4484。是自建夹具同版本两种路径对比，不是0.6→0.7或同花顺性能承诺。
+- 本次结案只改文档，执行代码、测试、Swift夹具及长测脚本与已验收846468b保持逐字节一致。分支原始CI run43389460915的Python3.10/3.12/3.13矩阵通过（网站原始attempt1及每个job逐步成功读回）。后续正式提交CI另行核验。
+- 原始证据保留Mac本地私有目录；两小时终态SHA256为6b04083f403acc3db581d70a08373cc28a8dccdba081cc3daa9c8d8c0438ce5f。详见[接口与持续验收](qualified-workflows.md)。
 
 ## 0.6.0 安装版验收
 

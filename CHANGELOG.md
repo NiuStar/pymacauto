@@ -1,12 +1,12 @@
 # Changelog
 
-## 0.7.0 — 未发布候选
+## 0.7.0
 
 - PageSession切页共用OperationSession锁、日志、防重、模态、停止与独立页面指纹。
 - AppProfile支持窗口内层级路径和声明的动作/可写属性能力检查，明确action_tested=false。
 - inspect-children/explain-locator/export-locator只读SDK/CLI，不包含AXValue，不授权输入。
 - 剩余总预算传入内部等待，回执区分错误阶段/类别并保留原生码。
-- 持续运行工具将模块/夹具SHA、资源采样、只读同花顺当前页与回收结果持久化；长测尚待完成。
+- 持续运行工具将模块/夹具SHA、资源采样、只读同花顺当前页与回收结果持久化；两小时3416次自建字段操作、118次同花顺只读及完整原生控件/切页验收通过。
 
 ## 0.6.0
 
