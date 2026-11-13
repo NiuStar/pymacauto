@@ -12,7 +12,7 @@ with app.session(identifier="example.window",
     receipt = session.apply(field, "fill", value="hello", operation_id="request-1")
 ```
 
-日志父目录须当前用户所有、权限0700，数据库须0600且非符号链接/多硬链接。使用SQLite DELETE journal与synchronous=EXTRA，事务提交后才派发。日志保存带私有随机盐的请求HMAC及阶段/回执，不保存选择器和输入值原文。数据库本身仍是私有审计数据。
+日志父目录须当前用户所有、权限0700，数据库须0600且非符号链接/多硬链接。0.6.0还要求整个祖先路径不含符号链接，保留身份描述符并在边界复查；只读诊断使用mode=ro，不初始化新库。使用SQLite DELETE journal与synchronous=EXTRA，事务提交后才派发。日志保存带私有随机盐的请求HMAC及阶段/回执，不保存选择器和输入值原文。数据库本身仍是私有审计数据。
 
 同一ID不同目标、动作、参数、条件、窗口或进程身份会拒绝；重新打开日志遇到PREPARED/派发意图都不会自动重放。必须保留并备份日志，删除/替换数据库会丢失防重历史。它不是跨UI与SQLite的原子事务，也不是业务“恰好一次”。磁盘或数据库错误必须停止，不可换新日志重试。
 

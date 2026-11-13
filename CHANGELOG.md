@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- child()/locator_path()按类型、父子层级、零基index、候选数和目标指纹定位；CLI支持path。
+- 日志意图后重新检查目标/窗口/条件/模态与协作停止，不自动使用替换引用。
+- 日志保留FD身份、路径/辅助文件校验、并发初始化协作锁和只读审计。
+- journal-inspect、journal-observe、profile-check、profile-diff。
+- 同进程循环、RSS/线程/FD采样及停止验收；查询局部复用不跨操作缓存。
+
 ## 0.5.0
 
 - SQLite私有意图日志、请求HMAC、同ID冲突拒绝、损坏schema拒绝与只读恢复。

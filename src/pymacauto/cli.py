@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import sqlite3
 
 from . import Application,MacAXError,UnsafeOperation,__version__
 
@@ -14,8 +15,14 @@ def parser():
     p.add_argument('--version',action='version',version='%(prog)s '+__version__)
     p.add_argument('--output',help='Create private JSON file exclusively; never overwrite')
     sub=p.add_subparsers(dest='command',required=True)
+    audit=sub.add_parser('journal-inspect')
+    audit.add_argument('--journal',required=True)
+    audit.add_argument('--output',default=argparse.SUPPRESS)
+    diff=sub.add_parser('profile-diff')
+    diff.add_argument('--before',required=True);diff.add_argument('--after',required=True)
+    diff.add_argument('--output',default=argparse.SUPPRESS)
     for command in ('doctor','apps','windows','tree','inspect','find','get-value',
-                    'read-table','click','set-value','fill','action','wait','page','verified-action'):
+                    'read-table','click','set-value','fill','action','wait','page','verified-action','profile-check','journal-observe'):
         q=sub.add_parser(command)
         q.add_argument('--output',default=argparse.SUPPRESS,help='Create private JSON output file')
         if command=='doctor':q.add_argument('--prompt',action='store_true')
@@ -24,7 +31,8 @@ def parser():
         target.add_argument('--pid',type=int);target.add_argument('--bundle-id');target.add_argument('--name')
         q.add_argument('--max-nodes',type=int,default=5000)
         q.add_argument('--max-depth',type=int,default=40)
-        if command not in ('windows','tree','inspect','page','fill'):
+        if command not in ('windows','tree','inspect','page','fill','profile-check'):
+            q.add_argument('--path',help='JSON array of hierarchical locator steps')
             for field in ('role','subrole','title','identifier','description','help'):
                 option='--ax-help' if field=='help' else '--'+field
                 q.add_argument(option,dest=field)
@@ -47,7 +55,8 @@ def parser():
             q.add_argument('--timeout',type=float,default=5)
             q.add_argument('--state',choices=('exists','gone'),default='exists')
             q.add_argument('--value')
-        if command=='verified-action':
+        if command=='profile-check':q.add_argument('--config',required=True)
+        if command in ('verified-action','journal-observe'):
             q.add_argument('--window',required=True,help='JSON top-level window selector')
             q.add_argument('--target',required=True,help='JSON control selector within approved window')
             q.add_argument('--expect',required=True,help='JSON postcondition selector within approved window')
@@ -66,6 +75,12 @@ def parser():
 def run(args):
     if args.command in ('click','set-value','fill','action','page','verified-action') and not args.execute:
         raise UnsafeOperation('Mutation requires --execute; inspect the unique target first')
+    if args.command=='journal-inspect':
+        from .journal import audit_journal
+        return audit_journal(args.journal)
+    if args.command=='profile-diff':
+        from .profiles import AppProfile
+        return AppProfile.diff(json.loads(Path(args.before).read_text()),json.loads(Path(args.after).read_text()))
     from .native import NativeBackend
     backend=NativeBackend()
     if args.command=='doctor':
@@ -78,22 +93,35 @@ def run(args):
     if args.command=='windows':return [e.info() for e in app.windows()]
     if args.command=='tree':return app.dump_tree()
     if args.command=='inspect':return app.inspect(max_nodes=args.max_nodes,max_depth=args.max_depth)
-    if args.command=='verified-action':
+    if args.command=='profile-check':
+        from .profiles import AppProfile
+        return AppProfile(json.loads(Path(args.config).read_text())).inspect(app)
+    if args.command in ('verified-action','journal-observe'):
         from .operations import Condition,OperationSession
         from .core import Locator,_selector
         from .query import window_scope
         if args.journal and not args.operation_id:raise ValueError('--journal requires --operation-id')
         window=json.loads(args.window)
-        target=_selector(json.loads(args.target));expected=_selector(json.loads(args.expect))
+        if not isinstance(window,dict):raise ValueError('window must be a selector object')
+        target=json.loads(args.target);expected=json.loads(args.expect)
+        if isinstance(target,dict):target=_selector(target)
+        if isinstance(expected,dict):expected=_selector(expected)
+        if not isinstance(target,(list,dict)) or not isinstance(expected,(list,dict)):raise ValueError('target/expect require selector objects or paths')
         root=lambda:window_scope(app,**window).root
-        if args.journal:
+        if isinstance(target,list) or isinstance(expected,list):
+            if not isinstance(target,list) or not isinstance(expected,list):raise ValueError('Both target and expect must be paths')
+            target_locator=app.locator_path(target);expect_locator=app.locator_path(expected)
+        elif args.journal:
             # Journal requests must use serializable application-rooted chains.
             target_locator=app.window(**window).child_window(**target)
             expect_locator=app.window(**window).child_window(**expected)
         else:
             target_locator=Locator(app,(target,),root=root)
             expect_locator=Locator(app,(expected,),root=root)
-        with OperationSession(app,window=window,journal=args.journal) as session:
+        with OperationSession(app,window=window,journal=args.journal,readonly=args.command=='journal-observe') as session:
+            if args.command=='journal-observe':
+                if not args.journal or not args.operation_id:raise ValueError('journal-observe requires journal and operation-id')
+                return session.recover(args.operation_id,target_locator,postcondition=Condition(expect_locator,value=args.expect_value),timeout=args.timeout)
             return session.execute(target_locator,
                 postcondition=Condition(expect_locator,value=args.expect_value),
                 timeout=args.timeout,events=args.events,operation_id=args.operation_id)
@@ -111,7 +139,10 @@ def run(args):
     keys=('role','subrole','title','identifier','description','help')
     criteria={key+suffix:getattr(args,key+suffix) for key in keys for suffix in ('','_re')
               if getattr(args,key+suffix) is not None}
-    if args.window_identifier is not None:
+    if args.path is not None:
+        if criteria or args.window_identifier:raise ValueError('--path cannot combine with flat/window selectors')
+        locator=app.locator_path(json.loads(args.path))
+    elif args.window_identifier is not None:
         from .query import window_scope
         scope=window_scope(app,identifier=args.window_identifier)
         if args.command=='read-table':
@@ -147,8 +178,9 @@ def main(argv=None):
         result=run(args)
         text=json.dumps({'ok':True,'result':result},ensure_ascii=False,allow_nan=False)
         code=1 if ((args.command=='doctor' and not result['ready']) or
-                   (args.command=='verified-action' and not result['verified'])) else 0
-    except (MacAXError,ValueError,TypeError,OSError,re.error) as exc:
+                   (args.command=='verified-action' and not result['verified']) or
+                   (args.command=='profile-check' and not result['qualified'])) else 0
+    except (MacAXError,ValueError,TypeError,OSError,re.error,sqlite3.Error) as exc:
         text=json.dumps({'ok':False,'error':type(exc).__name__,'message':str(exc)},ensure_ascii=False)
         code=2
     if output_file is not None:

@@ -67,6 +67,23 @@ class PublicCLITests(unittest.TestCase):
         code,result=self.invoke(base+['--execute'],b)
         self.assertEqual(code,1);self.assertEqual(result['result']['status'],'DISPATCHED_UNCONFIRMED')
         self.assertEqual(len(b.calls),1)
+    def test_hierarchical_json_cli(self):
+        path=[{'relation':'descendant','selector':{'role':'AXWindow','title':'Demo'}},
+              {'relation':'child','selector':{'role':'AXButton'},'index':1,'expected_count':2}]
+        b=MemoryAX();b.nodes['b']['AXValue']='second'
+        code,result=self.invoke(['get-value','--pid','42','--path',json.dumps(path)],b)
+        self.assertEqual(code,0);self.assertEqual(result['result'],'second')
+    def test_journal_inspect_missing_does_not_create(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder).resolve()/'absent'/'ops.db'
+            code,result=self.invoke(['journal-inspect','--journal',str(path)])
+            self.assertEqual(code,2);self.assertFalse(path.parent.exists())
+    def test_corrupt_journal_is_json_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder).resolve()/'broken.db'
+            path.write_bytes(b'not sqlite');path.chmod(0o600)
+            code,result=self.invoke(['journal-inspect','--journal',str(path)])
+            self.assertEqual(code,2);self.assertFalse(result['ok'])
     def test_sdk_discovery_helpers(self):
         b=MemoryAX()
         with patch('pymacauto.native.NativeBackend',return_value=b):

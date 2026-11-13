@@ -132,6 +132,18 @@ def main():
             assert windows[0].child_window(identifier='pymacauto.input').get_value()=='hello AX'
             assert windows[0].labelled_field('Input').get_value()=='hello AX'
             assert app.child_window(identifier='pymacauto.input').get_value()=='hello AX'
+            # Structural hierarchy, filtered sibling index and independent fingerprint.
+            path=[{'relation':'window','selector':{'identifier':'pymacauto.window'}},
+                  {'relation':'child','selector':{'role':'AXTextField'},'index':0,
+                   'expected_count':1,'verify':{'identifier':'pymacauto.input'}}]
+            indexed=app.locator_path(path)
+            assert indexed.get_value()=='hello AX'
+            indexed.set_edit_text('hello AX')
+            assert windows[0].child(role='AXTextField',index=0,expected_count=1).get_value()=='hello AX'
+            cli_path=subprocess.run([sys.executable,'-m','pymacauto','get-value','--pid',str(child.pid),
+                '--path',json.dumps(path)],capture_output=True,text=True,env=cli_env,timeout=15)
+            assert cli_path.returncode==0 and json.loads(cli_path.stdout)['result']=='hello AX'
+            report['checks']['hierarchy_type_index']=True
             report['checks']['convenience_sdk'] = True
             cli_fill=subprocess.run([sys.executable,'-m','pymacauto','fill','--pid',str(child.pid),
                 '--window-identifier','pymacauto.window','--label','Input','--value','CLI text','--execute'],
@@ -233,6 +245,14 @@ def main():
                 assert durable.execute(target,postcondition=durable_post,operation_id='native-durable',timeout=0)==first
                 observed=durable.recover('native-durable',target,postcondition=durable_post,timeout=0)
                 assert observed['status']=='RECOVERY_OBSERVED'
+            from pymacauto.journal import audit_journal
+            before_bytes=journal_path.read_bytes()
+            audited=audit_journal(journal_path)
+            assert len(audited['operations'])==1 and journal_path.read_bytes()==before_bytes
+            with app.session(identifier='pymacauto.window',journal=journal_path,readonly=True) as observer:
+                assert observer.recover('native-durable',target,postcondition=durable_post,timeout=0)['observed']
+            assert journal_path.read_bytes()==before_bytes
+            report['checks']['readonly_journal_audit_observe']=True
             report['checks']['durable_reopen_no_replay']=True
             with app.session(identifier='pymacauto.window') as protected:
                 assert protected.apply(app.child_window(identifier='pymacauto.input'),'fill',value='protected')['status']=='CONFIRMED'
@@ -257,6 +277,39 @@ def main():
                 spawn.append(time.perf_counter()-started)
                 assert proc.returncode==0 and json.loads(proc.stdout)['result']==value
             report['checks']['reuse_vs_process']={'reuse_seconds':reuse,'fresh_process_seconds':spawn,'exact_values_equal':True}
+            # Same interpreter/backend/session: observer and journal lifecycle churn.
+            import threading,resource
+            cycles=int(os.environ.get('PYMACAUTO_SOAK_CYCLES','12'))
+            if not 1<=cycles<=10000:raise ValueError('soak cycles must be 1..10000')
+            duration=float(os.environ.get('PYMACAUTO_SOAK_SECONDS','0'))
+            interval=float(os.environ.get('PYMACAUTO_SOAK_INTERVAL','0'))
+            import math
+            if not math.isfinite(duration) or not 0<=duration<=86400 or not math.isfinite(interval) or not 0<=interval<=60:raise ValueError('Invalid soak seconds/interval')
+            resources=[];loop_start=time.monotonic()
+            with app.session(identifier='pymacauto.window') as persistent:
+                cycle=0
+                while cycle<cycles or time.monotonic()-loop_start<duration:
+                    import objc
+                    with objc.autorelease_pool():
+                        desired='cycle-'+str(cycle)
+                        receipt=persistent.apply(indexed,'fill',value=desired,timeout=2)
+                        assert receipt['status']=='CONFIRMED',receipt
+                        with AXEvents(app,targets=[indexed.resolve().ref]) as watcher:watcher.pause(.001)
+                    if cycle%50==0:
+                        import gc
+                        gc.collect()
+                    if cycle==0 or cycle%max(1,cycles//2)==0:
+                        fds=subprocess.check_output(['/bin/ps','-p',str(os.getpid()),'-o','rss='],text=True).strip()
+                        resources.append({'cycle':cycle,'rss_kb':int(fds),'threads':threading.active_count(),
+                                          'peak_rss':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,'fd_count':len(os.listdir('/dev/fd'))})
+                    cycle+=1
+                    if interval:time.sleep(interval)
+                stop=threading.Event();stop.set()
+                with app.session(identifier='pymacauto.window',stop=stop) as stopped:
+                    blocked=stopped.apply(indexed,'fill',value='must not write',timeout=0)
+                    assert blocked['status']=='NOT_DISPATCHED'
+                assert indexed.get_value()=='cycle-'+str(cycle-1)
+            report['checks']['same_process_soak']={'cycles':cycle,'requested_cycles':cycles,'requested_seconds':duration,'elapsed_seconds':time.monotonic()-loop_start,'resources':resources,'stop_prevents_input':True}
             app.child_window(identifier='pymacauto.sheet').click()
             deadline=time.monotonic()+3
             from pymacauto.core import _get

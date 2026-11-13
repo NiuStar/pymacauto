@@ -13,7 +13,7 @@ from pathlib import Path
 from pymacauto import Application,Condition
 from pymacauto.operations import OperationSession
 from test_core import MemoryAX
-root=Path(sys.argv[1]);phase=sys.argv[2]
+root=Path(sys.argv[1]).resolve();phase=sys.argv[2]
 b=MemoryAX();b.nodes['app']['AXWindows']=['window'];b.nodes['window']['AXIdentifier']='win'
 b.nodes['b'].update(AXIdentifier='result',AXValue='before')
 a=Application.connect(pid=42,backend=b)

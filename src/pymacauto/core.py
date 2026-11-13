@@ -1,5 +1,6 @@
 """Lazy, unambiguous AX locators. No focus, event injection or pixel fallback."""
 from collections import deque
+import copy
 import math
 import re
 import time
@@ -63,6 +64,17 @@ def _selector(criteria):
         elif not isinstance(value, str):
             raise ValueError(f'{key} must be a string')
     return dict(criteria)
+
+
+def _path_step(selector,*,relation='child',index=None,expected_count=None,verify=None):
+    if relation not in ('child','descendant','window'):raise ValueError('Unknown path relation')
+    if not isinstance(selector,dict) or (verify is not None and not isinstance(verify,dict)):raise ValueError('Selector and verify must be objects')
+    if index is not None:_positive(index,'index',integer=True,zero=True)
+    if expected_count is not None:_positive(expected_count,'expected_count',integer=True,zero=True)
+    if index is not None and expected_count is not None and index>=expected_count:
+        raise ValueError('index must be less than expected_count')
+    return {'$path':True,'relation':relation,'selector':_selector(selector),'index':index,
+            'expected_count':expected_count,'verify':_selector(verify) if verify is not None else None}
 
 
 def _json_value(value):
@@ -146,9 +158,9 @@ class Application:
             raise ElementNotFound('AXWindows unavailable')
         return [Element(self,ref) for ref in refs]
 
-    def session(self,*,journal=None,profile=None,**window):
+    def session(self,*,journal=None,profile=None,stop=None,readonly=False,**window):
         from .operations import OperationSession
-        return OperationSession(self,window=window,journal=journal,profile=profile)
+        return OperationSession(self,window=window,journal=journal,profile=profile,stop=stop,readonly=readonly)
 
     def inspect(self,**limits):
         from .inspector import inspect_application
@@ -184,6 +196,20 @@ class Application:
             raise ValueError('window() requires AXWindow')
         return self.child_window(**{**criteria, 'role': 'AXWindow'})
 
+    def locator_path(self,steps):
+        if not isinstance(steps,(list,tuple)) or not steps:raise ValueError('Nonempty path required')
+        if len(steps)>self.max_depth:raise SearchLimitExceeded('Locator path depth budget')
+        chain=[]
+        for step in steps:
+            if not isinstance(step,dict) or not {'relation','selector'}<=set(step) or set(step)-{'relation','selector','index','expected_count','verify'}:
+                raise ValueError('Path step requires relation/selector and known optional fields')
+            if not isinstance(step['selector'],dict):raise ValueError('Path selector must be an object')
+            chain.append(_path_step(**step))
+        return Locator(self,tuple(chain))
+
+    def child(self,*,index=None,expected_count=None,verify=None,**criteria):
+        return Locator(self,(_path_step(criteria,index=index,expected_count=expected_count,verify=verify),))
+
     def descendants(self, **criteria):
         if criteria:
             criteria = _selector(criteria)
@@ -198,16 +224,40 @@ class Application:
 
 class Locator:
     def __init__(self, app, chain, root=None):
-        self.app, self.chain, self.root = app, chain, root
+        self.app, self.chain, self.root = app, copy.deepcopy(chain), root
 
     def child_window(self, **criteria):
         return Locator(self.app, self.chain + (_selector(criteria),), self.root)
 
+    def child(self,*,index=None,expected_count=None,verify=None,**criteria):
+        return Locator(self.app,self.chain+(_path_step(criteria,index=index,expected_count=expected_count,verify=verify),),self.root)
+
     def resolve(self):
         root = self.app._root if self.root is None else (self.root() if callable(self.root) else self.root)
         for criteria in self.chain:
-            matches = [ref for ref, _ in self.app._walk(root)
-                       if _matches(self.app.backend, ref, criteria)]
+            step=criteria if criteria.get('$path') is True else None
+            selector=step['selector'] if step else criteria
+            if step and step['relation'] in ('child','window'):
+                if step['relation']=='window' and self.app.backend.key(root)!=self.app.backend.key(self.app._root):
+                    raise ValueError('window relation only allowed at application root')
+                refs=self.app.backend.get(root,'AXWindows' if step['relation']=='window' else 'AXChildren')
+                if not isinstance(refs,(list,tuple)):raise ElementNotFound('Path relation unavailable')
+                if len(refs)>self.app.max_nodes:raise SearchLimitExceeded('Path children node budget')
+                seen=set();candidates=[]
+                for ref in refs:
+                    key=self.app.backend.key(ref)
+                    if key not in seen:seen.add(key);candidates.append(ref)
+            else:candidates=[ref for ref,_ in self.app._walk(root)]
+            matches=[ref for ref in candidates if _matches(self.app.backend,ref,selector)]
+            if step:
+                count=step['expected_count']
+                if count is not None and len(matches)!=count:raise UnsafeOperation('Path sibling count changed')
+                index=step['index']
+                if index is not None:
+                    if index>=len(matches):raise ElementNotFound('Path index out of range')
+                    matches=[matches[index]]
+                if len(matches)==1 and step['verify'] is not None and not _matches(self.app.backend,matches[0],step['verify']):
+                    raise UnsafeOperation('Indexed target fingerprint mismatch')
             if not matches:
                 raise ElementNotFound(f'No AX element matches {criteria!r}')
             if len(matches) != 1:
@@ -269,6 +319,9 @@ class Element:
 
     def child_window(self,**criteria):
         return Locator(self.app,(_selector(criteria),),self.ref)
+
+    def child(self,*,index=None,expected_count=None,verify=None,**criteria):
+        return Locator(self.app,(_path_step(criteria,index=index,expected_count=expected_count,verify=verify),),self.ref)
 
     def children(self,**criteria):
         if criteria: criteria=_selector(criteria)

@@ -8,7 +8,7 @@ from test_core import MemoryAX
 class JournalTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        self.path=Path(self.temp.name)/'ops.sqlite'
+        self.path=Path(self.temp.name).resolve()/'ops.sqlite'
         self.b=MemoryAX();self.b.nodes['app']['AXWindows']=['window']
         self.b.nodes['window']['AXIdentifier']='win'
         self.b.nodes['b'].update(AXIdentifier='result',AXValue='before')

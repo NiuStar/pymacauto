@@ -16,7 +16,7 @@
 ```bash
 uv build
 uv venv --python 3.12 .venv-check
-uv pip install --python .venv-check/bin/python dist/pymacauto-0.5.0-py3-none-any.whl
+uv pip install --python .venv-check/bin/python dist/pymacauto-0.6.0-py3-none-any.whl
 .venv-check/bin/python -m unittest discover -s tests -v
 .venv-check/bin/python tests/native/smoke.py --backend-checks
 .venv-check/bin/python scripts/native_check.py --installed
@@ -25,6 +25,17 @@ uv pip install --python .venv-check/bin/python dist/pymacauto-0.5.0-py3-none-any
 ```
 
 `--installed` 禁止源码路径注入，基础夹具还核查 SDK 与 CLI 都从独立环境导入。原生运行完整原始记录保留在操作者私有目录，不作为公开发行物。
+
+## 0.6.0 安装版验收
+
+- Mac独立安装版211项回归通过；覆盖直接child、类型过滤后零基index、expected_count、verify、路径重建/重排、JSON CLI路径、持久化路径描述。
+- 日志祖先/数据库/锁/辅助文件替换拒绝、6个真实子进程并发首次初始化、只读审计不写文件、损坏日志JSON错误均有回归。
+- 最后派发检查覆盖意图提交时新增sheet、替换控件、前置条件变化、停止信号；不重复派发。
+- 最新同一进程60秒完成401次层级保护填写及观察器创建/关闭。线程1、FD5采样不变；RSS由68992KB波动至66224KB，不能推导全天无泄漏。显式autorelease pool及周期GC是验收工具策略，SDK不替调用方管理全部长期运行内存。
+- 原生诊断确认readonly journal audit/observe无数据库字节变化、前台保持和夹具回收。
+- 原生100×5严格表格、双页200行采集和3组交错数据一致通过。真实同花顺当前持仓9×15与旧版完全相同，零UI动作。
+- 额外最后检查有安全成本；局部成员证据复用未删除原有模态/归属/唯一性/读回门，不承诺同花顺整体提速。
+- 60秒循环不代替数小时/全天运行；SQLite按路径内部打开仍有同用户恶意替换竞态的残余边界，见层级定位指南。
 
 ## 0.5.0 安装版验收
 

@@ -14,7 +14,7 @@ from .errors import (AXError, AmbiguousMatch, AttributeUnsupported, ElementNotFo
                      MacAXError, PermissionDenied, PlatformError,
                      SearchLimitExceeded, UnsafeOperation, VerificationFailed, WaitTimeout)
 
-__version__ = '0.5.0'
+__version__ = '0.6.0'
 __all__ = ['AXMetrics','AppProfile','collect_pages','Control','OperationSession','Condition','AXEvents','wait_condition','labelled_field', 'QueryScope', 'window_scope', 'PageSession', 'read_table', 'Application', 'Element', 'Locator', 'AXError', 'AmbiguousMatch',
            'AttributeUnsupported', 'ElementNotFound', 'MacAXError',
            'PermissionDenied', 'PlatformError', 'SearchLimitExceeded',

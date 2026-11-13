@@ -77,7 +77,7 @@ class AXEvents:
             if hasattr(value,'add_note'):value.add_note('Observer cleanup: '+type(exc).__name__)
 
 
-def wait_condition(condition,*,timeout=5,fallback_interval=.25):
+def wait_condition(condition,*,timeout=5,fallback_interval=.25,before_check=None):
     """Read immediately and after notifications/bounded fallback; no actions."""
     _positive(timeout,'timeout',zero=True);_positive(fallback_interval,'fallback_interval')
     app=condition.locator.app;start=time.monotonic();checks=0
@@ -86,6 +86,7 @@ def wait_condition(condition,*,timeout=5,fallback_interval=.25):
     except ElementNotFound:targets=[app._root]
     with AXEvents(app,targets=targets) as events:
         while True:
+            if before_check is not None:before_check()
             checks+=1
             if condition.check():return {'verified':True,'mode':events.mode,'events':events.received,
                 'checks':checks,'elapsed_seconds':time.monotonic()-start,'unsupported':sorted(set(events.unsupported))}

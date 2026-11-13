@@ -61,13 +61,13 @@ class OperationSession:
     the library understands transactions. It may deliberately describe a modal
     result; modals are rejected before input, not automatically dismissed.
     """
-    def __init__(self,app,*,window,journal=None,profile=None):
-        self.app=app;self.window=_selector(window);self.profile=profile
+    def __init__(self,app,*,window,journal=None,profile=None,stop=None,readonly=False):
+        self.app=app;self.window=_selector(window);self.profile=profile;self.stop=stop;self.readonly=readonly
         self._lock=threading.RLock();self._closed=False;self._receipts={};self._fingerprints={}
         from .journal import Journal
         identity=getattr(app.backend,'process_identity',None)
         self.identity=identity(app.pid) if callable(identity) and journal is not None else dict(app.info)
-        self.journal=Journal(journal) if journal is not None else None
+        self.journal=Journal(journal,readonly=True) if journal is not None and readonly else (Journal(journal) if journal is not None else None)
 
     def _request(self,target,postcondition,precondition,action):
         def locator(value):
@@ -87,7 +87,16 @@ class OperationSession:
             self._closed=True
             if self.journal is not None:self.journal.close()
 
+    def _check_stop(self):
+        if self.stop is not None:
+            if hasattr(self.stop,'is_set'):stopped=self.stop.is_set()
+            else:
+                try:Path(self.stop).lstat();stopped=True
+                except FileNotFoundError:stopped=False
+            if stopped:raise UnsafeOperation('Cooperative stop requested')
+
     def _guard(self,target):
+        self._check_stop()
         identity=getattr(self.app.backend,'process_identity',None)
         if self.journal is not None and callable(identity) and identity(self.app.pid)!=self.identity:
             raise UnsafeOperation('Application process identity changed')
@@ -96,17 +105,23 @@ class OperationSession:
         b=self.app.backend
         windows=b.get(self.app._root,'AXWindows')
         if not isinstance(windows,(list,tuple)):raise UnsafeOperation('Window list unavailable')
-        # Inspect structural nodes but exclude data-heavy table/list subtrees.
+        # Query-local membership evidence, never retained across operations.
+        approved_members=set()
         for window in windows:
             if _get(b,window,'AXModal') is True or _get(b,window,'AXSubrole') in ('AXDialog','AXSystemDialog') or _get(b,window,'AXRole')=='AXSheet':
                 raise UnsafeOperation('Unexpected modal window')
-            for ref,_ in QueryScope(self.app,window,leaf_roles=('AXTable','AXList','AXOutline')).walk():
-                if _get(b,ref,'AXRole')=='AXSheet' or _get(b,ref,'AXSheets') or _get(b,ref,'AXModal') is True:
+            for ref,role in QueryScope(self.app,window,leaf_roles=('AXTable','AXList','AXOutline')).walk():
+                if b.key(window)==b.key(scope.root):approved_members.add(b.key(ref))
+                if role=='AXSheet' or _get(b,ref,'AXSheets') or _get(b,ref,'AXModal') is True:
                     raise UnsafeOperation('Unexpected sheet')
+        for step in target.chain:
+            if step.get('$path') and step.get('index') is not None and step.get('expected_count') is None:
+                raise UnsafeOperation('Protected indexed paths require expected_count')
         element=target.resolve()
         if element.app is not self.app:raise UnsafeOperation('Target belongs to another connection')
-        members={b.key(ref) for ref,_ in QueryScope(self.app,scope.root).walk()}
-        if b.key(element.ref) not in members:raise UnsafeOperation('Target outside approved window')
+        if b.key(element.ref) not in approved_members:
+            members={b.key(ref) for ref,_ in QueryScope(self.app,scope.root).walk()}
+            if b.key(element.ref) not in members:raise UnsafeOperation('Target outside approved window')
         element._writable()
         role=_get(b,element.ref,'AXRole');enabled=_get(b,element.ref,'AXEnabled')
         if enabled is not True and not (enabled is None and role in ('AXRow','AXCell','AXTabGroup')):
@@ -130,6 +145,7 @@ class OperationSession:
             if record is None:raise UnsafeOperation('No original operation')
             start=time.monotonic()
             while True:
+                self._check_stop()
                 if postcondition.check():return {**record,'status':'RECOVERY_OBSERVED','verified':False,'observed':True,'recovered':True}
                 remaining=timeout-(time.monotonic()-start)
                 if remaining<=0:return {**record,'observed':False,'recovered':True}
@@ -145,6 +161,8 @@ class OperationSession:
             action={'kind':kind,'value':value},operation_id=operation_id,timeout=timeout,events=events)
 
     def execute(self,target,*,postcondition,precondition=None,action='AXPress',timeout=5,interval=.05,operation_id=None,events=False):
+        if self.readonly:raise UnsafeOperation('Read-only session cannot dispatch')
+        action=copy.deepcopy(action)
         if not isinstance(postcondition,Condition) or (precondition is not None and not isinstance(precondition,Condition)):
             raise ValueError('Explicit Condition required')
         if postcondition.locator.app is not self.app or (precondition and precondition.locator.app is not self.app):
@@ -178,6 +196,7 @@ class OperationSession:
                     raise UnsafeOperation('Precondition not met')
                 if postcondition.check():raise UnsafeOperation('Postcondition already satisfied; use a distinct result')
                 element=self._guard(target)
+                window_key=self.app.backend.key(window_scope(self.app,**self.window).root)
                 receipt['timings']['preflight_seconds']=time.monotonic()-stage
                 if isinstance(action,str):
                     if action not in element.backend.actions(element.ref):raise UnsafeOperation('Action unavailable')
@@ -194,6 +213,13 @@ class OperationSession:
                     self.journal.intent(receipt['operation_id'])
                 receipt['timings']['intent_seconds']=time.monotonic()-stage
                 stage=time.monotonic()
+                # Intent fsync may give the UI time to change: resolve and
+                # guard again, but never substitute a replacement reference.
+                self._guard_same(target,element)
+                if self.app.backend.key(window_scope(self.app,**self.window).root)!=window_key:raise UnsafeOperation('Window changed before dispatch')
+                if precondition is not None and not precondition.check():raise UnsafeOperation('Precondition changed before dispatch')
+                if postcondition.check():raise UnsafeOperation('Postcondition changed before dispatch')
+                self._check_stop()
                 receipt.update(status='DISPATCHED_UNCONFIRMED',dispatch_attempted=True,attempts=1)
                 if isinstance(action,str):element.perform(action)
                 else:
@@ -210,10 +236,11 @@ class OperationSession:
                 stage=time.monotonic()
                 if events:
                     from .events import wait_condition
-                    observation=wait_condition(postcondition,timeout=timeout,fallback_interval=max(interval,.25))
+                    observation=wait_condition(postcondition,timeout=timeout,fallback_interval=max(interval,.25),before_check=self._check_stop)
                     receipt.update(status='CONFIRMED',verified=True,observation=observation)
                 deadline=time.monotonic()+timeout
                 while not receipt['verified']:
+                    self._check_stop()
                     if postcondition.check():
                         receipt.update(status='CONFIRMED',verified=True);break
                     remaining=deadline-time.monotonic()
