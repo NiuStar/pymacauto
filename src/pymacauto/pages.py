@@ -1,7 +1,7 @@
 """Caller-configured page matching/navigation; no application/business schema."""
 import time
 import copy
-from .core import _positive, _matches, _selector, Locator, Element
+from .core import _positive, _matches, _selector, Locator, Element, _get, _required_get
 from .operations import Condition,OperationSession
 from .query import window_scope, QueryScope
 from .tables import optional
@@ -118,7 +118,7 @@ class PageSession:
     def scope(self):return window_scope(self.app,leaf_roles=self.leaf_roles,**self.window)
 
     def direct_matches(self,root,selector):
-        children=self.app.backend.get(root,'AXChildren')
+        children=_required_get(self.app.backend,root,'AXChildren')
         if not isinstance(children,(list,tuple)):raise ElementNotFound('Direct children unavailable')
         if len(children)>self.app.max_nodes:
             from .errors import SearchLimitExceeded
@@ -132,6 +132,11 @@ class PageSession:
         return found
 
     def detect(self,*,trigger=None):
+        from .query_context import active_context,QueryContext
+        if active_context(self.app.backend) is not None:return self._detect_phase(trigger=trigger)
+        with QueryContext(self.app):return self._detect_phase(trigger=trigger)
+
+    def _detect_phase(self,*,trigger=None):
         if trigger is not None and trigger not in self.pages:raise ValueError('Unknown trigger page')
         scope=self.scope();matches=[];triggers=[]
         window_root=scope.root
@@ -216,6 +221,8 @@ class PageSession:
         if not receipt['verified']:
             native=receipt.get('native_error')
             if native:raise AXError(native['operation'],native['code'])
+            if receipt.get('error_category')=='DEADLINE_EXCEEDED':
+                raise WaitTimeout('Protected page total budget exhausted; inspect receipt before retry')
             if receipt['status']=='NOT_DISPATCHED':
                 from .errors import UnsafeOperation
                 raise UnsafeOperation('Protected page switch not dispatched: '+str(receipt.get('error')))

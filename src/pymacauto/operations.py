@@ -35,7 +35,7 @@ def _file_lock(pid):
     except BaseException:
         os.close(fd);raise
     return fd
-from .core import Element, _get, _matches, _selector, _positive
+from .core import Element, _get, _matches, _selector, _positive, _required_get
 from .errors import ElementNotFound, UnsafeOperation,StopRequested,LayoutChanged
 from .query import window_scope, QueryScope
 
@@ -103,6 +103,11 @@ class OperationSession:
             if stopped:raise StopRequested('Cooperative stop requested')
 
     def _guard(self,target):
+        from .query_context import QueryContext,active_context
+        if active_context(self.app.backend) is not None:return self._guard_phase(target)
+        with QueryContext(self.app,guard=True):return self._guard_phase(target)
+
+    def _guard_phase(self,target):
         self._check_stop()
         identity=getattr(self.app.backend,'process_identity',None)
         if self.journal is not None and callable(identity) and identity(self.app.pid)!=self.identity:
@@ -110,15 +115,19 @@ class OperationSession:
         if self.profile is not None:self.profile.require(self.app)
         scope=window_scope(self.app,**self.window)
         b=self.app.backend
-        windows=b.get(self.app._root,'AXWindows')
+        windows=_required_get(b,self.app._root,'AXWindows')
         if not isinstance(windows,(list,tuple)):raise UnsafeOperation('Window list unavailable')
         # Query-local membership evidence, never retained across operations.
         approved_members=set()
+        from .query_context import active_context
+        evidence=active_context(b)
         for window in windows:
+            evidence.prefetch(window,('AXModal','AXRole'))
             if _get(b,window,'AXModal') is True or _get(b,window,'AXSubrole') in ('AXDialog','AXSystemDialog') or _get(b,window,'AXRole')=='AXSheet':
                 raise UnsafeOperation('Unexpected modal window')
+            approved=b.key(window)==b.key(scope.root)
             for ref,role in QueryScope(self.app,window,leaf_roles=('AXTable','AXList','AXOutline')).walk():
-                if b.key(window)==b.key(scope.root):approved_members.add(b.key(ref))
+                if approved:approved_members.add(b.key(ref))
                 if role=='AXSheet' or _get(b,ref,'AXSheets') or _get(b,ref,'AXModal') is True:
                     raise UnsafeOperation('Unexpected sheet')
         for step in target.chain:
@@ -129,6 +138,7 @@ class OperationSession:
         if b.key(element.ref) not in approved_members:
             members={b.key(ref) for ref,_ in QueryScope(self.app,scope.root).walk()}
             if b.key(element.ref) not in members:raise UnsafeOperation('Target outside approved window')
+        evidence.prefetch(element.ref,('AXEnabled','AXRole'))
         element._writable()
         role=_get(b,element.ref,'AXRole');enabled=_get(b,element.ref,'AXEnabled')
         if enabled is not True and not (enabled is None and role in ('AXRow','AXCell','AXTabGroup')):
@@ -238,11 +248,13 @@ class OperationSession:
                 held=True;fd=_file_lock(self.app.pid)
                 if self._closed:raise UnsafeOperation('Session closed')
                 stage=time.monotonic()
-                if precondition is not None and not precondition.check():
-                    raise UnsafeOperation('Precondition not met')
-                if postcondition.check():raise UnsafeOperation('Postcondition already satisfied; use a distinct result')
-                element=self._guard(target)
-                window_key=self.app.backend.key(window_scope(self.app,**self.window).root)
+                from .query_context import QueryContext
+                with QueryContext(self.app,guard=True):
+                    if precondition is not None and not precondition.check():
+                        raise UnsafeOperation('Precondition not met')
+                    if postcondition.check():raise UnsafeOperation('Postcondition already satisfied; use a distinct result')
+                    element=self._guard(target)
+                    window_key=self.app.backend.key(window_scope(self.app,**self.window).root)
                 receipt['timings']['preflight_seconds']=time.monotonic()-stage
                 if isinstance(action,str):
                     if action not in element.backend.actions(element.ref):raise UnsafeOperation('Action unavailable')
@@ -263,10 +275,11 @@ class OperationSession:
                 stage=time.monotonic()
                 # Intent fsync may give the UI time to change: resolve and
                 # guard again, but never substitute a replacement reference.
-                self._guard_same(target,element)
-                if self.app.backend.key(window_scope(self.app,**self.window).root)!=window_key:raise LayoutChanged('Window changed before dispatch')
-                if precondition is not None and not precondition.check():raise UnsafeOperation('Precondition changed before dispatch')
-                if postcondition.check():raise UnsafeOperation('Postcondition changed before dispatch')
+                with QueryContext(self.app,guard=True):
+                    self._guard_same(target,element)
+                    if self.app.backend.key(window_scope(self.app,**self.window).root)!=window_key:raise LayoutChanged('Window changed before dispatch')
+                    if precondition is not None and not precondition.check():raise UnsafeOperation('Precondition changed before dispatch')
+                    if postcondition.check():raise UnsafeOperation('Postcondition changed before dispatch')
                 self._check_stop()
                 if timeout>0:budget.require('pre_dispatch')
                 error_stage='dispatch'

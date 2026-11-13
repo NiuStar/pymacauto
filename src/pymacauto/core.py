@@ -1,6 +1,7 @@
 """Lazy, unambiguous AX locators. No focus, event injection or pixel fallback."""
 from collections import deque
 import copy
+from functools import lru_cache
 import math
 import re
 import time
@@ -30,7 +31,16 @@ def _positive(value, name, integer=False, zero=False):
     return value
 
 
+def _required_get(backend,ref,name):
+    # Required native relations preserve AttributeUnsupported; never adopt an
+    # optional missing-attribute cache entry as evidence of disappearance.
+    return backend.get(ref,name)
+
+
 def _get(backend, ref, name):
+    from .query_context import active_context
+    context=active_context(backend)
+    if context is not None:return context.get(ref,name)
     if name == 'AXValue':
         try:
             secure = backend.get(ref, 'AXSubrole') == 'AXSecureTextField'
@@ -96,15 +106,23 @@ def _value_equal(actual, expected):
     return actual == expected
 
 
+@lru_cache(maxsize=512)
+def _selector_plan(items):
+    from .plans import compile_selector
+    return compile_selector(dict(items))
+
+
 def _matches(backend, ref, criteria):
-    for key, expected in criteria.items():
-        actual = _get(backend, ref, FIELDS[key.removesuffix('_re')])
-        if key.endswith('_re'):
-            if not isinstance(actual, str) or re.search(expected, actual) is None:
-                return False
-        elif not _value_equal(actual, expected):
-            return False
-    return True
+    if not criteria:return True
+    from .query_context import active_context
+    context=active_context(backend)
+    if context is not None:return context.selector(criteria).matches(backend,ref)
+    # Do not retain private value/label selectors in a process-global cache.
+    if any(k.removesuffix('_re') not in ('role','subrole','enabled') for k in criteria):
+        from .plans import compile_selector
+        plan=compile_selector(criteria)
+    else:plan=_selector_plan(tuple(criteria.items()))
+    return plan.matches(backend,ref)
 
 
 class Application:
@@ -161,6 +179,10 @@ class Application:
     def session(self,*,journal=None,profile=None,stop=None,readonly=False,**window):
         from .operations import OperationSession
         return OperationSession(self,window=window,journal=journal,profile=profile,stop=stop,readonly=readonly)
+
+    def automation(self,profile,*,journal=None,stop=None,pages=None):
+        from .automation import Automation
+        return Automation(self,profile,journal=journal,stop=stop,pages=pages)
 
     def inspect(self,**limits):
         from .inspector import inspect_application
@@ -233,6 +255,11 @@ class Locator:
         return Locator(self.app,self.chain+(_path_step(criteria,index=index,expected_count=expected_count,verify=verify),),self.root)
 
     def resolve(self):
+        from .query_context import active_context,QueryContext
+        if active_context(self.app.backend) is not None:return self._resolve_phase()
+        with QueryContext(self.app):return self._resolve_phase()
+
+    def _resolve_phase(self):
         root = self.app._root if self.root is None else (self.root() if callable(self.root) else self.root)
         for criteria in self.chain:
             step=criteria if criteria.get('$path') is True else None
@@ -240,7 +267,7 @@ class Locator:
             if step and step['relation'] in ('child','window'):
                 if step['relation']=='window' and self.app.backend.key(root)!=self.app.backend.key(self.app._root):
                     raise ValueError('window relation only allowed at application root')
-                refs=self.app.backend.get(root,'AXWindows' if step['relation']=='window' else 'AXChildren')
+                refs=_required_get(self.app.backend,root,'AXWindows' if step['relation']=='window' else 'AXChildren')
                 if not isinstance(refs,(list,tuple)):raise ElementNotFound('Path relation unavailable')
                 if len(refs)>self.app.max_nodes:raise SearchLimitExceeded('Path children node budget')
                 seen=set();candidates=[]
@@ -379,6 +406,8 @@ class Element:
             raise UnsafeOperation('Element is disabled')
 
     def perform(self, action):
+        from .query_context import active_context
+        if active_context(self.backend) is not None:raise UnsafeOperation('Input inside read phase')
         self._writable()
         if not isinstance(action, str) or action not in self.backend.actions(self.ref):
             raise UnsafeOperation(f'Element does not expose action {action!r}')
@@ -395,6 +424,8 @@ class Element:
         return self.set_value(text)
 
     def set_value(self, value, verify_timeout=2.0):
+        from .query_context import active_context
+        if active_context(self.backend) is not None:raise UnsafeOperation('Input inside read phase')
         if not isinstance(value, (str, bool, int, float)) or (isinstance(value, float) and not math.isfinite(value)):
             raise ValueError('AXValue must be a finite JSON scalar')
         _positive(verify_timeout, 'verify_timeout', zero=True)

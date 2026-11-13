@@ -9,6 +9,8 @@ class Control:
     """Wrap a fresh Locator (recommended), or an explicitly held Element."""
     def __init__(self,target,*,before_input=None):self.target=target;self.before_input=before_input
     def _input(self,element,callback):
+        from .query_context import active_context
+        if active_context(element.backend) is not None:raise UnsafeOperation('Input inside read phase')
         if self.before_input is not None:self.before_input()
         return callback()
     def element(self):return self.target.resolve() if hasattr(self.target,'resolve') else self.target

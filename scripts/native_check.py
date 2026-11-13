@@ -61,7 +61,7 @@ def main():
     (contents / 'Info.plist').write_bytes(plistlib.dumps({
         'CFBundleIdentifier': 'org.pymacauto.fixture', 'CFBundleExecutable': 'MacAXFixture',
         'CFBundleName': 'MacAXFixture', 'CFBundlePackageType': 'APPL',
-        'CFBundleVersion': '1', 'LSUIElement': True,
+        'CFBundleVersion': '1', 'CFBundleShortVersionString':'1.0','LSUIElement': True,
     }))
     subprocess.run(['swiftc', str(ROOT / 'tests/native/Fixture.swift'),
                     '-o', str(binary), '-framework', 'AppKit'], check=True, timeout=90)
@@ -264,6 +264,15 @@ def main():
                     metric_receipt=protected.apply(app.child_window(identifier='pymacauto.input'),'fill',value='metric value')
                     assert metric_receipt['status']=='CONFIRMED'
             report['checks']['operation_metrics']={'timings':metric_receipt['timings'],**metrics.summary()}
+            from pymacauto import AppProfile
+            profile=AppProfile({**app.backend.app_metadata(app.pid),'window':{'identifier':'pymacauto.window'},
+                'controls':{'input':{'path':[{'relation':'descendant','selector':{'identifier':'pymacauto.input'}}],'settable':['AXValue']},
+                            'apply':{'identifier':'pymacauto.apply'},'result':{'identifier':'pymacauto.result'}}})
+            with app.automation(profile) as ui:
+                assert ui.control('input').fill('facade')['status']=='CONFIRMED'
+                assert ui.control('input').read()=='facade'
+                assert ui.control('apply').click(expect=ui.condition('result',value='applied:facade'))['status']=='CONFIRMED'
+            report['checks']['named_automation_native']=True
             report['checks']['unified_protected_controls']=True
             # Identical readonly query in fresh processes vs interpreter reuse.
             reuse=[];spawn=[]

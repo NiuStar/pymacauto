@@ -1,6 +1,6 @@
 """Fresh bounded structural queries with explicit subtree boundaries."""
 from collections import deque
-from .core import Element, _get, _matches, _selector
+from .core import Element, _get, _matches, _selector, _required_get
 from .errors import AmbiguousMatch,ElementNotFound,SearchLimitExceeded
 
 
@@ -19,12 +19,15 @@ class QueryScope:
 
     def walk(self):
         b=self.app.backend
+        from .query_context import active_context
+        evidence=active_context(b)
         queue=deque([(self.root,0)]);seen=set()
         while queue:
             ref,depth=queue.popleft();key=b.key(ref)
             if key in seen:continue
             seen.add(key)
             if len(seen)>self.app.max_nodes:raise SearchLimitExceeded('Structural query node budget')
+            if evidence is not None and evidence.guard:evidence.prefetch(ref,('AXRole','AXSheets','AXModal'))
             role=_get(b,ref,'AXRole')
             yield ref,role
             if role in self.leaf_roles:continue
@@ -54,7 +57,7 @@ class QueryScope:
 def window_scope(app,*,leaf_roles=(),**criteria):
     """Resolve unique top-level window through AXWindows, not entire app tree."""
     criteria=_selector({'role':'AXWindow',**criteria})
-    windows=app.backend.get(app._root,'AXWindows')
+    windows=_required_get(app.backend,app._root,'AXWindows')
     if not isinstance(windows,(list,tuple)):raise ElementNotFound('AXWindows unavailable')
     found=[w for w in windows if _matches(app.backend,w,criteria)]
     if not found:raise ElementNotFound('Window not found')
