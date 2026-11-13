@@ -57,6 +57,16 @@ class PublicCLITests(unittest.TestCase):
         b=MemoryAX();b.nodes['a']['AXSubrole']='AXSecureTextField';b.nodes['a']['AXValue']='not-public'
         code,result=self.invoke(['get-value','--pid','42','--identifier','apply'],b)
         self.assertEqual(code,2);self.assertNotIn('not-public',json.dumps(result))
+    def test_verified_action_requires_explicit_execute_and_nonzero_unconfirmed(self):
+        base=['verified-action','--pid','42','--window','{"identifier":"win"}',
+              '--target','{"identifier":"apply"}','--expect','{"identifier":"other"}',
+              '--expect-value','ready','--timeout','0']
+        code,result=self.invoke(base)
+        self.assertEqual(code,2);self.assertEqual(result['error'],'UnsafeOperation')
+        b=MemoryAX();b.nodes['app']['AXWindows']=['window'];b.nodes['window']['AXIdentifier']='win'
+        code,result=self.invoke(base+['--execute'],b)
+        self.assertEqual(code,1);self.assertEqual(result['result']['status'],'DISPATCHED_UNCONFIRMED')
+        self.assertEqual(len(b.calls),1)
     def test_sdk_discovery_helpers(self):
         b=MemoryAX()
         with patch('pymacauto.native.NativeBackend',return_value=b):

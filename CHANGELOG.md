@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- 单次操作回执、显式前后置条件、未知模态窗口保护和verified-action CLI。
+- 可复用协作串行session、进程间锁、会话内1024项指定ID防重派发。
+- 角色校验控件：勾选、单选、数值、popup、页签和可写行选择。
+- AXObserver线程归属注册/关闭、真实通知与有界轮询降级。
+- 严格表格支持AXCell内唯一AXStaticText，保留双读及双轴校验。
+- 原生夹具覆盖控件、通知、弹窗、会话与CLI。无实盘交易测试。
+
 ## 0.3.0
 
 首次公开的 `pymacauto` SDK 与 JSON CLI，源于内部 `macax` 实验版本；导入和命令名改用 `pymacauto`。

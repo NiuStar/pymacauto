@@ -78,6 +78,15 @@ def main():
         for r in results:
             import hashlib
             r['data_sha256']=hashlib.sha256(json.dumps(r.pop('values'),ensure_ascii=False).encode()).hexdigest()
+        from pymacauto import Element
+        strict=Element(app,session.detect()['table']).read_table()
+        assert strict['row_count']==100 and strict['column_count']==5
+        assert strict['rows'][99]['Field4']=='A:99:c4'
+        from pymacauto import Control
+        rows=app.backend.get(session.detect()['table'],'AXRows')
+        assert Control(Element(app,rows[0])).select()['verified']
+        first_cells=app.backend.get(rows[0],'AXChildren')
+        cell_roles=[app.backend.get(c,'AXRole') for c in first_cells]
         config_path=ROOT/'build/perf/pages.json'
         config_path.write_text(json.dumps({'window':{'identifier':'perf.window'},'pages':profile}))
         cli_env=({**os.environ,'PYTHONPATH':str(ROOT/'src')} if '--installed' not in sys.argv else
@@ -91,7 +100,7 @@ def main():
         assert front()==before,'Fixture changed foreground'
         assert child.poll() is None,'Fixture exited early'
         print(json.dumps({'status':'PASS','fixture':'owned_appkit_100x5','measurements':results,
-                          'foreground_preserved':True,'cli_page_verified':True,'config_constructor_verified':True,'module':__import__('pymacauto.query',fromlist=['']).__file__}))
+                          'foreground_preserved':True,'strict_table_verified':True,'native_row_select_verified':True,'native_cell_roles':cell_roles,'cli_page_verified':True,'config_constructor_verified':True,'module':__import__('pymacauto.query',fromlist=['']).__file__}))
     finally:
         if child.poll() is None:
             child.terminate()

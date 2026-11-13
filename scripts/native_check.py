@@ -148,6 +148,102 @@ def main():
             assert json.loads(private_output.read_text())['result']=='CLI text'
             assert private_output.stat().st_mode & 0o777==0o600
             report['checks']['private_cli_output'] = True
+            from pymacauto.controls import Control
+            check=Control(app.child_window(identifier='pymacauto.check'))
+            assert check.set_checked(True)['verified']
+            assert check.set_checked(True)['verified']
+            assert check.set_checked(False)['verified']
+            assert Control(app.child_window(identifier='pymacauto.slider')).set_numeric(7)['verified']
+            assert Control(app.child_window(identifier='pymacauto.popup')).choose('Two')['verified']
+            assert Control(app.child_window(identifier='pymacauto.radio')).select()['verified']
+            assert Control(app.child_window(identifier='pymacauto.tabs')).select_tab('Second')['verified']
+            report['checks']['native_controls']=True
+            from pymacauto.operations import OperationSession,Condition
+            session=OperationSession(app,window={'identifier':'pymacauto.window'})
+            target=app.child_window(identifier='pymacauto.apply')
+            post=Condition(app.child_window(identifier='pymacauto.result'),value='applied:CLI text')
+            receipt=session.execute(target,postcondition=post,timeout=2)
+            assert receipt['status']=='CONFIRMED',receipt
+            assert session.execute(target,postcondition=Condition(app.child_window(identifier='pymacauto.result'),value='never'),timeout=0)['status']=='DISPATCHED_UNCONFIRMED'
+            from pymacauto.events import AXEvents
+            condition=Condition(app.child_window(identifier='pymacauto.result'),value='delayed ready')
+            with AXEvents(app,targets=[app.child_window(identifier='pymacauto.result').resolve().ref]) as events:
+                app.child_window(identifier='pymacauto.delayed').click()
+                deadline=time.monotonic()+2;checks=0;started=time.monotonic()
+                while not condition.check():
+                    checks+=1
+                    assert time.monotonic()<deadline
+                    events.pause(min(.5,max(0,deadline-time.monotonic())))
+                assert events.received>0,'No actual AX notification received'
+                report['checks']['ax_events']={'received':events.received,'checks':checks,'mode':events.mode,'ms':(time.monotonic()-started)*1000}
+            event_pairs=[]
+            for pair in range(3):
+                for mode in (('poll','events') if pair%2==0 else ('events','poll')):
+                    app.child_window(identifier='pymacauto.apply').click()
+                    result_ref=app.child_window(identifier='pymacauto.result').resolve().ref
+                    with AXEvents(app,targets=[result_ref]) as watcher:
+                        app.child_window(identifier='pymacauto.delayed').click()
+                        started=time.monotonic();n=0
+                        while True:
+                            n+=1
+                            if condition.check():break
+                            assert time.monotonic()-started<3
+                            if mode=='events':watcher.pause(.5)
+                            else:time.sleep(.01)
+                        event_pairs.append({'pair':pair,'mode':mode,'checks':n,
+                            'events':watcher.received,'elapsed_seconds':time.monotonic()-started,
+                            'exact_value_equal':condition.locator.get_value()=='delayed ready'})
+            assert all(r['exact_value_equal'] for r in event_pairs)
+            assert sum(r['events'] for r in event_pairs if r['mode']=='events')>0
+            report['checks']['event_poll_pairs']=event_pairs
+            native_session=app.session(identifier='pymacauto.window')
+            same=native_session.execute(target,postcondition=post,operation_id='owned-once',timeout=2,events=True)
+            assert same['status']=='CONFIRMED',same
+            assert native_session.execute(target,postcondition=post,operation_id='owned-once',timeout=0)==same
+            # OS file-lock contention across a real child process.
+            from pymacauto.operations import _file_lock
+            lock_fd=_file_lock(app.pid)
+            try:
+                child_lock=subprocess.run([sys.executable,'-c',
+                    'from pymacauto.operations import _file_lock;import sys;_file_lock(int(sys.argv[1]))',str(app.pid)],
+                    capture_output=True,text=True,env=cli_env,timeout=10)
+                assert child_lock.returncode!=0 and 'BlockingIOError' in child_lock.stderr
+            finally:os.close(lock_fd)
+            native_session.close()
+            assert native_session.execute(target,postcondition=post,timeout=0)['status']=='NOT_DISPATCHED'
+            report['checks']['session_reuse_and_cross_process_exclusion']=True
+            app.child_window(identifier='pymacauto.input').set_edit_text('CLI verified')
+            cli_verified=subprocess.run([sys.executable,'-m','pymacauto','verified-action','--pid',str(child.pid),
+                '--window','{"identifier":"pymacauto.window"}',
+                '--target','{"identifier":"pymacauto.apply"}',
+                '--expect','{"identifier":"pymacauto.result"}','--expect-value','applied:CLI verified','--execute'],
+                capture_output=True,text=True,env=cli_env,timeout=15)
+            assert cli_verified.returncode==0,cli_verified.stdout+cli_verified.stderr
+            assert json.loads(cli_verified.stdout)['result']['status']=='CONFIRMED'
+            report['checks']['verified_cli']=True
+            # Identical readonly query in fresh processes vs interpreter reuse.
+            reuse=[];spawn=[]
+            for _ in range(3):
+                started=time.perf_counter()
+                value=app.child_window(identifier='pymacauto.result').get_value()
+                reuse.append(time.perf_counter()-started)
+                started=time.perf_counter()
+                proc=subprocess.run([sys.executable,'-m','pymacauto','get-value','--pid',str(child.pid),
+                    '--identifier','pymacauto.result'],capture_output=True,text=True,env=cli_env,timeout=15)
+                spawn.append(time.perf_counter()-started)
+                assert proc.returncode==0 and json.loads(proc.stdout)['result']==value
+            report['checks']['reuse_vs_process']={'reuse_seconds':reuse,'fresh_process_seconds':spawn,'exact_values_equal':True}
+            app.child_window(identifier='pymacauto.sheet').click()
+            deadline=time.monotonic()+3
+            from pymacauto.core import _get
+            while not app.descendants(role='AXSheet'):
+                assert time.monotonic()<deadline,'Sheet not observed'
+                time.sleep(.02)
+            blocked=session.execute(target,postcondition=post,timeout=0)
+            assert blocked['status']=='NOT_DISPATCHED' and blocked['attempts']==0,blocked
+            session.close()
+            report['checks']['single_dispatch_postcondition']=True
+            report['checks']['modal_blocks_input']=True
             current_front(workspace)
             after = workspace.frontmostApplication()
             report['foreground_after'] = int(after.processIdentifier()) if after else None

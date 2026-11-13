@@ -66,8 +66,16 @@ def read_table(backend, table, *, max_cells=100000, timeout=15):
                 if backend.key(cell)!=backend.key(axes[j][i]): raise MacAXError('ROW_COLUMN_REFERENCE_MISMATCH')
                 fields=many(cell,['AXSubrole','AXRole'])
                 if fields['AXSubrole']=='AXSecureTextField': raise MacAXError('SECURE_TABLE_CELL')
-                if fields['AXRole']!='AXStaticText': raise MacAXError('UNSUPPORTED_TABLE_CELL_ROLE')
-                value=get(cell,'AXValue')
+                if fields['AXRole']=='AXCell':
+                    nested=sequence(cell,'AXChildren')
+                    if len(nested)!=1:raise MacAXError('AMBIGUOUS_NESTED_TABLE_CELL')
+                    text=nested[0]
+                    nested_fields=many(text,['AXSubrole','AXRole'])
+                    if nested_fields['AXSubrole']=='AXSecureTextField':raise MacAXError('SECURE_TABLE_CELL')
+                    if nested_fields['AXRole']!='AXStaticText':raise MacAXError('UNSUPPORTED_NESTED_CELL_ROLE')
+                    value=get(text,'AXValue')
+                elif fields['AXRole']=='AXStaticText':value=get(cell,'AXValue')
+                else:raise MacAXError('UNSUPPORTED_TABLE_CELL_ROLE')
                 if not isinstance(value,str): raise MacAXError('TABLE_CELL_VALUE_UNAVAILABLE')
                 values.append(value)
             data.append(values)

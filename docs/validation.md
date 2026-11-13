@@ -16,7 +16,7 @@
 ```bash
 uv build
 uv venv --python 3.12 .venv-check
-uv pip install --python .venv-check/bin/python dist/pymacauto-0.3.0-py3-none-any.whl
+uv pip install --python .venv-check/bin/python dist/pymacauto-0.4.0-py3-none-any.whl
 .venv-check/bin/python -m unittest discover -s tests -v
 .venv-check/bin/python tests/native/smoke.py --backend-checks
 .venv-check/bin/python scripts/native_check.py --installed
@@ -25,6 +25,12 @@ uv pip install --python .venv-check/bin/python dist/pymacauto-0.3.0-py3-none-any
 ```
 
 `--installed` 禁止源码路径注入，基础夹具还核查 SDK 与 CLI 都从独立环境导入。原生运行完整原始记录保留在操作者私有目录，不作为公开发行物。
+
+## 0.4.0 候选扩展
+
+原生基础夹具新增复选/单选/滑块/popup/页签、真实AXObserver通知、三组交错事件/轮询值相等、未知sheet禁止输入、可复用会话重复ID和跨进程锁排他、verified-action命令。原生100×5表格新增严格read_table与行选择验证。最终安装版通过148项逻辑回归、10项桥接契约测试，以上原生门均PASS；前台保持、夹具进程回收。真实NSTableView单元格角色为AXCell，行选择实际读回通过。
+
+事件样本尚无稳定延迟优势；会话复用与新CLI进程启动按相同值读回测量，不混同切页耗时。最终三轮复用读值为2.75/2.88/2.92ms，新进程为251/246/266ms；仅为自建小窗口的读值成本。0.4.0同花顺当前持仓只读对照9行×15列，与前身全部值精确相同、零UI动作。未做全天持续运行或实盘提交测试。
 
 ## 已执行范围
 

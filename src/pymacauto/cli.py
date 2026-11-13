@@ -15,7 +15,7 @@ def parser():
     p.add_argument('--output',help='Create private JSON file exclusively; never overwrite')
     sub=p.add_subparsers(dest='command',required=True)
     for command in ('doctor','apps','windows','tree','inspect','find','get-value',
-                    'read-table','click','set-value','fill','action','wait','page'):
+                    'read-table','click','set-value','fill','action','wait','page','verified-action'):
         q=sub.add_parser(command)
         q.add_argument('--output',default=argparse.SUPPRESS,help='Create private JSON output file')
         if command=='doctor':q.add_argument('--prompt',action='store_true')
@@ -31,7 +31,7 @@ def parser():
                 q.add_argument(option+'-re',dest=field+'_re')
         if command in ('find','get-value','read-table','click','set-value','action','wait','fill'):
             q.add_argument('--window-identifier',required=command=='fill',help='Unique top-level window scope')
-        if command in ('click','set-value','fill','action','page'):q.add_argument('--execute',action='store_true')
+        if command in ('click','set-value','fill','action','page','verified-action'):q.add_argument('--execute',action='store_true')
         if command=='set-value':
             value=q.add_mutually_exclusive_group(required=True)
             value.add_argument('--value');value.add_argument('--json-value')
@@ -47,6 +47,13 @@ def parser():
             q.add_argument('--timeout',type=float,default=5)
             q.add_argument('--state',choices=('exists','gone'),default='exists')
             q.add_argument('--value')
+        if command=='verified-action':
+            q.add_argument('--window',required=True,help='JSON top-level window selector')
+            q.add_argument('--target',required=True,help='JSON control selector within approved window')
+            q.add_argument('--expect',required=True,help='JSON postcondition selector within approved window')
+            q.add_argument('--expect-value',required=True)
+            q.add_argument('--timeout',type=float,default=5)
+            q.add_argument('--events',action='store_true')
         if command=='page':
             q.add_argument('--config',required=True,help='JSON page fingerprint configuration')
             q.add_argument('--to',required=True,help='Target page name')
@@ -55,7 +62,7 @@ def parser():
 
 
 def run(args):
-    if args.command in ('click','set-value','fill','action','page') and not args.execute:
+    if args.command in ('click','set-value','fill','action','page','verified-action') and not args.execute:
         raise UnsafeOperation('Mutation requires --execute; inspect the unique target first')
     from .native import NativeBackend
     backend=NativeBackend()
@@ -69,6 +76,17 @@ def run(args):
     if args.command=='windows':return [e.info() for e in app.windows()]
     if args.command=='tree':return app.dump_tree()
     if args.command=='inspect':return app.inspect(max_nodes=args.max_nodes,max_depth=args.max_depth)
+    if args.command=='verified-action':
+        from .operations import Condition,OperationSession
+        from .core import Locator,_selector
+        from .query import window_scope
+        window=json.loads(args.window)
+        target=_selector(json.loads(args.target));expected=_selector(json.loads(args.expect))
+        root=lambda:window_scope(app,**window).root
+        with OperationSession(app,window=window) as session:
+            return session.execute(Locator(app,(target,),root=root),
+                postcondition=Condition(Locator(app,(expected,),root=root),value=args.expect_value),
+                timeout=args.timeout,events=args.events)
     if args.command=='page':
         from .pages import PageSession
         config=json.loads(Path(args.config).read_text(encoding='utf-8'))
@@ -118,7 +136,8 @@ def main(argv=None):
             output_file=os.fdopen(fd,'w',encoding='utf-8')
         result=run(args)
         text=json.dumps({'ok':True,'result':result},ensure_ascii=False,allow_nan=False)
-        code=1 if args.command=='doctor' and not result['ready'] else 0
+        code=1 if ((args.command=='doctor' and not result['ready']) or
+                   (args.command=='verified-action' and not result['verified'])) else 0
     except (MacAXError,ValueError,TypeError,OSError,re.error) as exc:
         text=json.dumps({'ok':False,'error':type(exc).__name__,'message':str(exc)},ensure_ascii=False)
         code=2

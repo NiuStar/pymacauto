@@ -146,6 +146,10 @@ class Application:
             raise ElementNotFound('AXWindows unavailable')
         return [Element(self,ref) for ref in refs]
 
+    def session(self,**window):
+        from .operations import OperationSession
+        return OperationSession(self,window=window)
+
     def inspect(self,**limits):
         from .inspector import inspect_application
         return inspect_application(self,**limits)
@@ -240,6 +244,10 @@ class Locator:
             if remaining <= 0:
                 raise WaitTimeout(f'AX wait timed out after {timeout}s ({state})')
             time.sleep(min(interval, remaining))
+
+    def control(self):
+        from .controls import Control
+        return Control(self)
 
     def get_value(self): return self.resolve().get_value()
     def read_table(self,**limits): return self.resolve().read_table(**limits)
