@@ -41,9 +41,33 @@ class PageTests(unittest.TestCase):
         with self.assertRaises(AXError):self.session.switch('B')
         self.assertEqual(len(self.b.calls),1)
     def test_noop_action_times_out_not_confirmed(self):
-        self.b.perform=lambda *a:self.b.calls.append(a)
-        with self.assertRaises(WaitTimeout):self.session.switch('B',timeout=.001)
-        self.assertEqual(len(self.b.calls),1)
+        # Time advances only once perform() has actually been entered. This
+        # tests a dispatched no-op, not interpreter/host preflight speed.
+        from unittest.mock import patch
+        clock=[100.0]
+        def noop(*args):
+            self.b.calls.append(args)
+            clock[0]+=1.0
+        self.b.perform=noop
+        with patch('time.monotonic',side_effect=lambda:clock[0]):
+            with self.assertRaises(WaitTimeout):self.session.switch('B',timeout=.001)
+        self.assertEqual(self.b.calls,[('b','AXPress')])
+        self.assertEqual(self.session.last_receipt['status'],'DISPATCHED_UNCONFIRMED')
+        self.assertEqual(self.session.last_receipt['error_category'],'DEADLINE_EXCEEDED')
+        self.assertEqual(self.session.detect()['page'],'A')
+    def test_pre_dispatch_budget_expiry_does_not_click(self):
+        from unittest.mock import patch
+        clock=[100.0]
+        original=self.session.wait
+        def delayed_wait(*args,**kwargs):
+            current=original(*args,**kwargs)
+            clock[0]+=1.0
+            return current
+        with patch('time.monotonic',side_effect=lambda:clock[0]), \
+                patch.object(self.session,'wait',side_effect=delayed_wait):
+            with self.assertRaises(WaitTimeout):self.session.switch('B',timeout=.001)
+        self.assertEqual(self.b.calls,[])
+        self.assertEqual(self.session.detect()['page'],'A')
     def test_duplicate_page_fingerprint_refuses(self):
         self.b.nodes['window']['AXChildren'].append('second')
         self.b.nodes['second']=dict(self.b.nodes['table'])
