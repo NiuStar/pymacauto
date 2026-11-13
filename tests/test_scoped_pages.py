@@ -23,7 +23,10 @@ class ScopedPagesTests(unittest.TestCase):
         s=self.session()
         self.assertEqual(s.switch('B')['page'],'B')
         self.assertEqual(s.switch('A')['page'],'A')
-        self.assertFalse(any(ref in ('noise','bad') and attr in ('AXChildren','AXColumns') for ref,attr in calls))
+        # Global modal safety scans structural nodes, but page detection must
+        # not read an out-of-scope table's headers or data.
+        self.assertFalse(any(ref in ('noise','bad') and attr in ('AXColumns','AXRows','AXValue') for ref,attr in calls))
+        self.assertTrue(s.last_receipt['verified'])
     def test_duplicate_container_refuses_before_click(self):
         self.b.nodes['duplicate']=dict(self.b.nodes['container'])
         self.b.nodes['window']['AXChildren'].append('duplicate')

@@ -51,7 +51,7 @@ def main():
                         app.child_window(role='AXButton',identifier='page.'+name).click()
                         table=app.child_window(role='AXTable',identifier='grid.'+name).resolve().ref
                     else:
-                        table=session.switch(name)['table']
+                        table=session.switch(name,timeout=30)['table']
                     # Independent exact native value sampling, same for both modes.
                     rows=b.get(table,'AXRows');values=[]
                     for row in rows:
@@ -91,21 +91,21 @@ def main():
         def read_page():return Element(app,session.detect()['table']).read_table()
         def next_page(snapshot):
             if snapshot['rows'][0]['Field0'].startswith('B:'):return False
-            session.switch('B');return True
-        collection=collect_pages(read_page,next_page,key_columns=['Field0'],max_pages=3,max_rows=300)
+            session.switch('B',timeout=30);return True
+        collection=collect_pages(read_page,next_page,key_columns=['Field0'],max_pages=3,max_rows=300,timeout=90)
         assert collection['row_count']==200 and collection['page_count']==2
         assert collection['stop_reason']=='CALLER_END_OBSERVED' and not collection['global_complete']
-        session.switch('A')
+        session.switch('A',timeout=30)
         config_path=ROOT/'build/perf/pages.json'
         config_path.write_text(json.dumps({'window':{'identifier':'perf.window'},'pages':profile}))
         cli_env=({**os.environ,'PYTHONPATH':str(ROOT/'src')} if '--installed' not in sys.argv else
                  {k:v for k,v in os.environ.items() if k!='PYTHONPATH'})
         cli=subprocess.run([sys.executable,'-m','pymacauto','page','--pid',str(child.pid),
-            '--config',str(config_path),'--to','B','--execute'],capture_output=True,text=True,env=cli_env,timeout=15)
+            '--config',str(config_path),'--to','B','--execute','--timeout','30'],capture_output=True,text=True,env=cli_env,timeout=45)
         assert cli.returncode==0,cli.stdout+cli.stderr
         assert json.loads(cli.stdout)['result']['page']=='B'
         assert session.detect()['page']=='B'
-        assert PageSession.from_config(app,json.loads(config_path.read_text())).switch('A')['page']=='A'
+        assert PageSession.from_config(app,json.loads(config_path.read_text())).switch('A',timeout=30)['page']=='A'
         assert front()==before,'Fixture changed foreground'
         assert child.poll() is None,'Fixture exited early'
         print(json.dumps({'status':'PASS','fixture':'owned_appkit_100x5','measurements':results,

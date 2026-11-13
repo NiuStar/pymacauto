@@ -70,11 +70,14 @@ class Control:
     def choose(self,title,*,timeout=2):
         if not isinstance(title,str) or not title:raise ValueError('Exact nonempty option title required')
         _positive(timeout,'timeout',zero=True)
+        from .deadlines import Deadline
+        budget=Deadline(timeout)
         e=self._role(('AXPopUpButton',))
         if e.get_value()==title:return {'verified':True,'attribute':'AXValue'}
         self._input(e,e.click)
         # Only the menu exposed under this control. Never search the app's
         # unrelated menus, pick the first duplicate, or retry opening it.
-        item=e.child_window(role='AXMenuItem',title=title).wait(timeout=timeout)
+        item=e.child_window(role='AXMenuItem',title=title).wait(timeout=budget.remaining())
+        if timeout>0:budget.require('menu_selection')
         self._input(item,item.click)
-        return self._verify('AXValue',title,timeout)
+        return self._verify('AXValue',title,budget.remaining())

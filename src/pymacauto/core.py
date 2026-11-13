@@ -7,7 +7,7 @@ import time
 
 from .errors import (AmbiguousMatch, AttributeUnsupported, ElementNotFound,
                      PermissionDenied, SearchLimitExceeded, UnsafeOperation,
-                     VerificationFailed, WaitTimeout)
+                     VerificationFailed, WaitTimeout,LayoutChanged)
 
 FIELDS = {'role': 'AXRole', 'subrole': 'AXSubrole', 'title': 'AXTitle',
           'value': 'AXValue', 'identifier': 'AXIdentifier',
@@ -251,13 +251,13 @@ class Locator:
             matches=[ref for ref in candidates if _matches(self.app.backend,ref,selector)]
             if step:
                 count=step['expected_count']
-                if count is not None and len(matches)!=count:raise UnsafeOperation('Path sibling count changed')
+                if count is not None and len(matches)!=count:raise LayoutChanged('Path sibling count changed')
                 index=step['index']
                 if index is not None:
                     if index>=len(matches):raise ElementNotFound('Path index out of range')
                     matches=[matches[index]]
                 if len(matches)==1 and step['verify'] is not None and not _matches(self.app.backend,matches[0],step['verify']):
-                    raise UnsafeOperation('Indexed target fingerprint mismatch')
+                    raise LayoutChanged('Indexed target fingerprint mismatch')
             if not matches:
                 raise ElementNotFound(f'No AX element matches {criteria!r}')
             if len(matches) != 1:
@@ -294,6 +294,16 @@ class Locator:
             if remaining <= 0:
                 raise WaitTimeout(f'AX wait timed out after {timeout}s ({state})')
             time.sleep(min(interval, remaining))
+
+    def inspect_children(self):
+        from .locator_diagnostics import inspect_children
+        return inspect_children(self)
+    def explain(self):
+        from .locator_diagnostics import explain_locator
+        return explain_locator(self)
+    def export(self):
+        from .locator_diagnostics import export_locator
+        return export_locator(self)
 
     def control(self):
         from .controls import Control

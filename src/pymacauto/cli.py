@@ -22,7 +22,7 @@ def parser():
     diff.add_argument('--before',required=True);diff.add_argument('--after',required=True)
     diff.add_argument('--output',default=argparse.SUPPRESS)
     for command in ('doctor','apps','windows','tree','inspect','find','get-value',
-                    'read-table','click','set-value','fill','action','wait','page','verified-action','profile-check','journal-observe'):
+                    'read-table','click','set-value','fill','action','wait','page','verified-action','profile-check','journal-observe','inspect-children','explain-locator','export-locator'):
         q=sub.add_parser(command)
         q.add_argument('--output',default=argparse.SUPPRESS,help='Create private JSON output file')
         if command=='doctor':q.add_argument('--prompt',action='store_true')
@@ -66,6 +66,9 @@ def parser():
             q.add_argument('--journal',help='Private durable SQLite operation journal')
             q.add_argument('--operation-id',help='Stable request ID required with --journal')
         if command=='page':
+            q.add_argument('--journal')
+            q.add_argument('--operation-id')
+            q.add_argument('--stop-file')
             q.add_argument('--config',required=True,help='JSON page fingerprint configuration')
             q.add_argument('--to',required=True,help='Target page name')
             q.add_argument('--timeout',type=float,default=5)
@@ -128,8 +131,11 @@ def run(args):
     if args.command=='page':
         from .pages import PageSession
         config=json.loads(Path(args.config).read_text(encoding='utf-8'))
-        result=PageSession.from_config(app,config).switch(args.to,timeout=args.timeout)
-        return {'page':result['page'],'headers':result['headers'],'verified':True,'focus_changed_by_framework':False}
+        if args.journal and not args.operation_id:raise ValueError('--journal requires --operation-id')
+        with app.session(**config['window'],journal=args.journal,stop=args.stop_file) as owner:
+            result=PageSession.from_config(app,config,operations=owner).switch(args.to,timeout=args.timeout,operation_id=args.operation_id)
+        return {'page':result['page'],'headers':result['headers'],'receipt':result['receipt'],
+                'verified':True,'focus_changed_by_framework':False}
     if args.command=='fill':
         from .query import window_scope
         from .fields import labelled_field
@@ -140,9 +146,9 @@ def run(args):
     criteria={key+suffix:getattr(args,key+suffix) for key in keys for suffix in ('','_re')
               if getattr(args,key+suffix) is not None}
     if args.path is not None:
-        if criteria or args.window_identifier:raise ValueError('--path cannot combine with flat/window selectors')
+        if criteria or getattr(args,'window_identifier',None):raise ValueError('--path cannot combine with flat/window selectors')
         locator=app.locator_path(json.loads(args.path))
-    elif args.window_identifier is not None:
+    elif getattr(args,'window_identifier',None) is not None:
         from .query import window_scope
         scope=window_scope(app,identifier=args.window_identifier)
         if args.command=='read-table':
@@ -153,6 +159,9 @@ def run(args):
         locator=Locator(app,(_selector(criteria),),
                         root=lambda:window_scope(app,identifier=args.window_identifier).root)
     else:locator=app.child_window(**criteria)
+    if args.command in ('inspect-children','explain-locator','export-locator'):
+        from . import locator_diagnostics
+        return getattr(locator_diagnostics,args.command.replace('-','_'))(locator)
     if args.command=='find':return locator.info()
     if args.command=='get-value':return locator.get_value()
     if args.command=='read-table':return locator.read_table(max_cells=args.max_cells,timeout=args.timeout)

@@ -31,5 +31,11 @@ class WaitTimeout(MacAXError):
 class UnsafeOperation(MacAXError):
     pass
 
+class StopRequested(UnsafeOperation):
+    pass
+
+class LayoutChanged(UnsafeOperation):
+    pass
+
 class VerificationFailed(MacAXError):
     pass

@@ -84,6 +84,13 @@ class PublicCLITests(unittest.TestCase):
             path.write_bytes(b'not sqlite');path.chmod(0o600)
             code,result=self.invoke(['journal-inspect','--journal',str(path)])
             self.assertEqual(code,2);self.assertFalse(result['ok'])
+    def test_readonly_locator_helpers_cli(self):
+        code,result=self.invoke(['inspect-children','--pid','42','--role','AXWindow'])
+        self.assertEqual(code,0);self.assertFalse(result['result']['values_included'])
+        code,result=self.invoke(['explain-locator','--pid','42','--identifier','apply'])
+        self.assertEqual(code,0);self.assertTrue(result['result']['complete'])
+        code,result=self.invoke(['export-locator','--pid','42','--identifier','apply'])
+        self.assertEqual(code,0);self.assertFalse(result['result']['authorizes_mutation'])
     def test_sdk_discovery_helpers(self):
         b=MemoryAX()
         with patch('pymacauto.native.NativeBackend',return_value=b):

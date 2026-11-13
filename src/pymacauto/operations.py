@@ -36,7 +36,7 @@ def _file_lock(pid):
         os.close(fd);raise
     return fd
 from .core import Element, _get, _matches, _selector, _positive
-from .errors import ElementNotFound, UnsafeOperation
+from .errors import ElementNotFound, UnsafeOperation,StopRequested,LayoutChanged
 from .query import window_scope, QueryScope
 
 
@@ -46,6 +46,9 @@ class Condition:
             raise ValueError('Condition state must be exists or gone')
         self.locator,self.state=locator,state
         self.criteria=_selector(criteria) if criteria else {}
+
+    def describe(self):
+        return {'state':self.state,'criteria':copy.deepcopy(self.criteria)}
 
     def check(self):
         try:element=self.locator.resolve()
@@ -73,9 +76,13 @@ class OperationSession:
         def locator(value):
             if value.app is not self.app or (self.journal is not None and value.root is not None):
                 raise ValueError('Durable operations require application-rooted lazy Locators')
-            return {'chain':value.chain,'root':None if value.root is None else id(value.root)}
+            result={'chain':value.chain,'root':None if value.root is None else id(value.root)}
+            if hasattr(value,'descriptor'):result['descriptor']=copy.deepcopy(value.descriptor)
+            return result
         def condition(value):
-            return None if value is None else {'locator':locator(value.locator),'state':value.state,'criteria':value.criteria}
+            if value is None:return None
+            if type(value) is Condition:return {'locator':locator(value.locator),'state':value.state,'criteria':value.criteria}
+            return {'locator':locator(value.locator),'condition':value.describe()}
         return {'identity':self.identity,'profile':self.profile.sha256 if self.profile is not None else None,'window':self.window,'target':locator(target),
                 'action':action,'post':condition(postcondition),'pre':condition(precondition)}
 
@@ -93,7 +100,7 @@ class OperationSession:
             else:
                 try:Path(self.stop).lstat();stopped=True
                 except FileNotFoundError:stopped=False
-            if stopped:raise UnsafeOperation('Cooperative stop requested')
+            if stopped:raise StopRequested('Cooperative stop requested')
 
     def _guard(self,target):
         self._check_stop()
@@ -131,7 +138,42 @@ class OperationSession:
     def _guard_same(self,target,element):
         fresh=self._guard(target)
         if self.app.backend.key(fresh.ref)!=self.app.backend.key(element.ref):
-            raise UnsafeOperation('Target identity changed during multi-step operation')
+            raise LayoutChanged('Target identity changed during multi-step operation')
+
+    def previous(self,target,*,postcondition,precondition=None,operation_id,action='AXPress'):
+        """Validate replay identity without observing or dispatching input."""
+        from .journal import canonical
+        import hashlib
+        with self._lock:
+            if self._closed:raise UnsafeOperation('Session closed')
+            request=self._request(target,postcondition,precondition,action)
+            fingerprint=self.journal.fingerprint(request) if self.journal else hashlib.sha256(canonical(request)).hexdigest()
+            if operation_id in self._receipts:
+                if fingerprint!=self._fingerprints[operation_id]:raise UnsafeOperation('Operation ID conflict')
+                return copy.deepcopy(self._receipts[operation_id])
+            return self.journal.lookup(operation_id,fingerprint) if self.journal else None
+
+    def remember_observation(self,target,*,postcondition,precondition=None,operation_id):
+        """Reserve an ID for an already-observed state, never causal success."""
+        if self.readonly:raise UnsafeOperation('Read-only session cannot reserve an operation')
+        if not isinstance(operation_id,str) or not operation_id or len(operation_id)>128:raise ValueError('Invalid operation_id')
+        from .journal import canonical
+        import hashlib
+        with self._lock:
+            self._check_stop()
+            existing=self.previous(target,postcondition=postcondition,precondition=precondition,operation_id=operation_id)
+            if existing is not None:return existing
+            if len(self._receipts)>=1024:raise UnsafeOperation('Receipt capacity reached; new session required')
+            request=self._request(target,postcondition,precondition,'AXPress')
+            fingerprint=self.journal.fingerprint(request) if self.journal else hashlib.sha256(canonical(request)).hexdigest()
+            receipt={'operation_id':operation_id,'status':'NOT_DISPATCHED','dispatch_attempted':False,
+                     'attempts':0,'verified':False,'observed':True,'error':None}
+            if self.journal is not None:
+                existing=self.journal.claim(operation_id,fingerprint)
+                if existing is not None:return existing
+                self.journal.finish(operation_id,receipt)
+            self._receipts[operation_id]=copy.deepcopy(receipt);self._fingerprints[operation_id]=fingerprint
+            return receipt
 
     def recover(self,operation_id,target,*,postcondition,precondition=None,action='AXPress',timeout=5,interval=.05):
         """Observation only, never promotes uncertainty to causal confirmation."""
@@ -153,6 +195,7 @@ class OperationSession:
 
     def apply(self,target,kind,*,value=None,postcondition=None,precondition=None,operation_id=None,timeout=5,events=False):
         if kind not in ('fill','check','numeric','select','tab','choose'):raise ValueError('Unknown protected control operation')
+        if kind=='fill' and not isinstance(value,str):raise ValueError('fill requires a string')
         if postcondition is None:
             if kind in ('tab','choose','select'):raise ValueError('Independent postcondition required for selection')
             if kind=='check':postcondition=Condition(target,value=int(value) if type(value) is bool else value)
@@ -162,6 +205,8 @@ class OperationSession:
 
     def execute(self,target,*,postcondition,precondition=None,action='AXPress',timeout=5,interval=.05,operation_id=None,events=False):
         if self.readonly:raise UnsafeOperation('Read-only session cannot dispatch')
+        from .deadlines import Deadline,classify_error
+        budget=Deadline(timeout)
         action=copy.deepcopy(action)
         if not isinstance(postcondition,Condition) or (precondition is not None and not isinstance(precondition,Condition)):
             raise ValueError('Explicit Condition required')
@@ -186,6 +231,7 @@ class OperationSession:
                 existing=self.journal.lookup(receipt['operation_id'],fingerprint)
                 if existing is not None:return existing
             lock=_app_lock(self.app.pid);held=False;fd=None;claimed=False
+            error_stage='preflight'
             try:
                 if len(self._receipts)>=1024:raise UnsafeOperation('Receipt capacity reached; new session required')
                 if not lock.acquire(blocking=False):raise UnsafeOperation('Application operation busy')
@@ -202,6 +248,8 @@ class OperationSession:
                     if action not in element.backend.actions(element.ref):raise UnsafeOperation('Action unavailable')
                 elif not isinstance(action,dict) or set(action)!={'kind','value'}:
                     raise ValueError('Invalid control operation')
+                error_stage='pre_dispatch'
+                if timeout>0:budget.require(error_stage)
                 stage=time.monotonic()
                 if self.journal is not None:
                     previous=self.journal.claim(receipt['operation_id'],fingerprint)
@@ -216,39 +264,57 @@ class OperationSession:
                 # Intent fsync may give the UI time to change: resolve and
                 # guard again, but never substitute a replacement reference.
                 self._guard_same(target,element)
-                if self.app.backend.key(window_scope(self.app,**self.window).root)!=window_key:raise UnsafeOperation('Window changed before dispatch')
+                if self.app.backend.key(window_scope(self.app,**self.window).root)!=window_key:raise LayoutChanged('Window changed before dispatch')
                 if precondition is not None and not precondition.check():raise UnsafeOperation('Precondition changed before dispatch')
                 if postcondition.check():raise UnsafeOperation('Postcondition changed before dispatch')
                 self._check_stop()
+                if timeout>0:budget.require('pre_dispatch')
+                error_stage='dispatch'
                 receipt.update(status='DISPATCHED_UNCONFIRMED',dispatch_attempted=True,attempts=1)
                 if isinstance(action,str):element.perform(action)
                 else:
                     from .controls import Control
-                    control=Control(element,before_input=lambda:self._guard_same(target,element));kind=action['kind'];value=action['value']
-                    if kind=='fill':element.set_edit_text(value)
-                    elif kind=='check':control.set_checked(value,timeout=timeout)
-                    elif kind=='numeric':control.set_numeric(value,timeout=timeout)
-                    elif kind=='select':control.select(timeout=timeout)
-                    elif kind=='tab':control.select_tab(value,timeout=timeout)
-                    elif kind=='choose':control.choose(value,timeout=timeout)
+                    def before_input():
+                        self._guard_same(target,element)
+                        if timeout>0:budget.require('dispatch')
+                    control=Control(element,before_input=before_input);kind=action['kind'];value=action['value']
+                    if kind=='fill':
+                        if _get(element.backend,element.ref,'AXRole') not in ('AXTextField','AXTextArea','AXComboBox'):raise UnsafeOperation('Editable text role required')
+                        before_input()
+                        element.set_value(value,verify_timeout=budget.remaining())
+                    elif kind=='check':control.set_checked(value,timeout=budget.remaining())
+                    elif kind=='numeric':control.set_numeric(value,timeout=budget.remaining())
+                    elif kind=='select':control.select(timeout=budget.remaining())
+                    elif kind=='tab':control.select_tab(value,timeout=budget.remaining())
+                    elif kind=='choose':control.choose(value,timeout=budget.remaining())
                     else:raise ValueError('Unknown control operation')
                 receipt['timings']['dispatch_seconds']=time.monotonic()-stage
                 stage=time.monotonic()
+                error_stage='observation'
+                if timeout>0:budget.require(error_stage)
                 if events:
                     from .events import wait_condition
-                    observation=wait_condition(postcondition,timeout=timeout,fallback_interval=max(interval,.25),before_check=self._check_stop)
+                    observation=wait_condition(postcondition,timeout=budget.remaining(),fallback_interval=max(interval,.25),before_check=self._check_stop)
+                    if timeout>0:budget.require('observation')
                     receipt.update(status='CONFIRMED',verified=True,observation=observation)
-                deadline=time.monotonic()+timeout
                 while not receipt['verified']:
                     self._check_stop()
+                    if timeout>0:budget.require('observation')
                     if postcondition.check():
+                        if timeout>0:budget.require('observation')
                         receipt.update(status='CONFIRMED',verified=True);break
-                    remaining=deadline-time.monotonic()
-                    if remaining<=0:break
+                    remaining=budget.remaining()
+                    if remaining<=0:
+                        from .errors import WaitTimeout
+                        raise WaitTimeout('Total observation budget exhausted')
                     time.sleep(min(interval,remaining))
                 receipt['timings']['observation_seconds']=time.monotonic()-stage
             except Exception as exc:
                 receipt['error']=type(exc).__name__
+                receipt['error_category']=classify_error(exc)
+                receipt['error_stage']=error_stage
+                if hasattr(exc,'code') and hasattr(exc,'operation'):
+                    receipt['native_error']={'code':exc.code,'operation':exc.operation}
             finally:
                 # Record uncertainty even when KeyboardInterrupt/SystemExit
                 # interrupts a native call; replay must not repeat the input.

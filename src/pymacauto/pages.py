@@ -1,6 +1,8 @@
 """Caller-configured page matching/navigation; no application/business schema."""
 import time
-from .core import _positive, _matches, _selector
+import copy
+from .core import _positive, _matches, _selector, Locator, Element
+from .operations import Condition,OperationSession
 from .query import window_scope, QueryScope
 from .tables import optional
 from .errors import AXError,ElementNotFound,AmbiguousMatch,WaitTimeout,MacAXError
@@ -19,6 +21,42 @@ def table_headers(backend,table):
     return headers
 
 
+class PageCondition(Condition):
+    """Independent observed page fingerprint; descriptor binds full config."""
+    def __init__(self,session,page):
+        super().__init__(session.app.child_window(role='AXTable'))
+        self.session,self.page=session,page
+        self._configuration=session.configuration()
+    def describe(self):
+        return {'kind':'page','page':self.page,'configuration':copy.deepcopy(self._configuration)}
+    def check(self):
+        if self.session.configuration()!=self._configuration:
+            from .errors import UnsafeOperation
+            raise UnsafeOperation('Page configuration changed during operation')
+        try:
+            observed=self.session.detect()['page']
+            return self.page is None or observed==self.page
+        except ElementNotFound:return False
+        except AXError as exc:
+            if exc.code not in (-25201,-25202,-25204):raise
+            self.session.read_errors.append({'operation':exc.operation,'code':exc.code})
+            return False
+
+
+class PageTrigger(Locator):
+    def __init__(self,session,page):
+        super().__init__(session.app,(session.pages[page]['trigger'],))
+        self.session,self.page=session,page
+        self.descriptor={'kind':'page_trigger','page':page,'configuration':session.configuration()}
+    def resolve(self):
+        if self.session.configuration()!=self.descriptor['configuration']:
+            from .errors import UnsafeOperation
+            raise UnsafeOperation('Page trigger configuration changed during operation')
+        result=self.session.detect(trigger=self.page)
+        if 'trigger' not in result:raise ElementNotFound('No page change required')
+        return Element(self.app,result['trigger'])
+
+
 class PageSession:
     """Fresh window scope each query; explicit pruning does not cover data nodes.
 
@@ -26,7 +64,7 @@ class PageSession:
     persisted across switches; only read-only discovery is retried on rebuild.
     """
     def __init__(self,app,*,window,pages,leaf_roles=('AXTable','AXList','AXOutline'),
-                 content_path=None,trigger_children_only=False):
+                 content_path=None,trigger_children_only=False,operations=None):
         if not isinstance(window,dict):raise ValueError('window must be a selector object')
         window=_selector(window)
         if not isinstance(pages,dict) or not pages:raise ValueError('pages must be a nonempty object')
@@ -58,16 +96,24 @@ class PageSession:
         self.content_path=None if content_path is None else [_selector(c) for c in content_path]
         if type(trigger_children_only) is not bool:raise ValueError('trigger_children_only must be bool')
         self.trigger_children_only=trigger_children_only
+        if operations is not None and (operations.app is not app or operations.window!=window):
+            raise ValueError('Page operations must use the same app/window')
+        self.operations=operations
+        self.last_receipt=None
 
     @classmethod
-    def from_config(cls,app,config):
+    def from_config(cls,app,config,*,operations=None):
         if not isinstance(config,dict):raise ValueError('Page configuration must be an object')
         allowed={'window','pages','content_path','trigger_children_only','leaf_roles'}
         if set(config)-allowed:raise ValueError('Unknown page configuration fields')
         if 'window' not in config or 'pages' not in config:raise ValueError('window and pages required')
         if not isinstance(config['window'],dict) or not isinstance(config['pages'],dict) or not config['pages']:
             raise ValueError('window and nonempty pages must be objects')
-        return cls(app,**config)
+        return cls(app,**config,operations=operations)
+
+    def configuration(self):
+        return copy.deepcopy({'window':self.window,'pages':self.pages,'leaf_roles':self.leaf_roles,
+                              'content_path':self.content_path,'trigger_children_only':self.trigger_children_only})
 
     def scope(self):return window_scope(self.app,leaf_roles=self.leaf_roles,**self.window)
 
@@ -140,11 +186,40 @@ class PageSession:
             if remaining<=0:raise WaitTimeout('Page target not observed')
             time.sleep(min(interval,remaining))
 
-    def switch(self,page,*,timeout=5):
+    def switch(self,page,*,timeout=5,operation_id=None):
         if page not in self.pages:raise ValueError('Unknown page')
+        _positive(timeout,'timeout',zero=True)
+        started=time.monotonic()
         current=self.wait(timeout=timeout,trigger=page)
-        if current['page']==page:return current
-        # Current page + trigger proved in one complete fresh scoped query.
-        from .core import Element
-        Element(self.app,current['trigger']).click()
-        return self.wait(page,timeout=timeout)
+        if self.operations is not None:self.operations._check_stop()
+        if current['page']==page:
+            if self.operations is not None and operation_id is not None:
+                previous=self.operations.remember_observation(PageTrigger(self,page),postcondition=PageCondition(self,page),
+                    precondition=PageCondition(self,None),operation_id=operation_id)
+                if previous is not None:
+                    self.last_receipt=previous
+                    if not previous.get('verified') and not (previous.get('observed') and previous.get('status')=='NOT_DISPATCHED'):
+                        from .errors import UnsafeOperation
+                        raise UnsafeOperation('Earlier page operation uncertain; observe/reconcile without replay')
+                    return {**current,'receipt':previous}
+            self.last_receipt={'status':'ALREADY_OBSERVED','verified':True,'dispatch_attempted':False}
+            return {**current,'receipt':self.last_receipt}
+        if timeout>0 and time.monotonic()-started>=timeout:raise WaitTimeout('Page total budget exhausted before dispatch')
+        owner=self.operations or OperationSession(self.app,window=self.window)
+        try:
+            receipt=owner.execute(PageTrigger(self,page),
+                precondition=PageCondition(self,None),postcondition=PageCondition(self,page),
+                operation_id=operation_id,timeout=max(0,timeout-(time.monotonic()-started)))
+            self.last_receipt=receipt
+        finally:
+            if self.operations is None:owner.close()
+        if not receipt['verified']:
+            native=receipt.get('native_error')
+            if native:raise AXError(native['operation'],native['code'])
+            if receipt['status']=='NOT_DISPATCHED':
+                from .errors import UnsafeOperation
+                raise UnsafeOperation('Protected page switch not dispatched: '+str(receipt.get('error')))
+            raise WaitTimeout('Protected page target unconfirmed; do not repeat input')
+        result=self.detect()
+        if result['page']!=page:raise WaitTimeout('Page changed after confirmation')
+        return {**result,'receipt':receipt}
