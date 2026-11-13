@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pymacauto"
+version = "0.3.0"
+description = "Public Accessibility automation for macOS: Python SDK and JSON CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = [
+  "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
+  "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
+]
+
+[project.urls]
+Repository = "https://github.com/NiuStar/pymacauto"
+Issues = "https://github.com/NiuStar/pymacauto/issues"
+
+[project.scripts]
+pymacauto = "pymacauto.cli:main"
+pymacauto-ths-read = "pymacauto.ths_reader:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

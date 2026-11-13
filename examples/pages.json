@@ -1,0 +1,31 @@
+{
+  "window": {
+    "identifier": "example.main-window"
+  },
+  "leaf_roles": ["AXTable", "AXList", "AXOutline"],
+  "trigger_children_only": false,
+  "pages": {
+    "overview": {
+      "trigger": {
+        "role": "AXButton",
+        "identifier": "example.page.overview"
+      },
+      "table": {
+        "role": "AXTable",
+        "identifier": "example.overview"
+      },
+      "headers": ["项目", "数量"]
+    },
+    "details": {
+      "trigger": {
+        "role": "AXButton",
+        "identifier": "example.page.details"
+      },
+      "table": {
+        "role": "AXTable",
+        "identifier": "example.details"
+      },
+      "headers": ["编号", "名称", "状态"]
+    }
+  }
+}

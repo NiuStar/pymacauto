@@ -1,0 +1,23 @@
+name: macOS tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install .
+      - run: python -m unittest discover -s tests -v
+      - run: python tests/native/smoke.py --backend-checks
+      - run: pymacauto --version
+      # Hosted runners do not grant Accessibility or provide the user's apps.
+      # Real GUI acceptance is an explicit local operation, not a CI claim.
